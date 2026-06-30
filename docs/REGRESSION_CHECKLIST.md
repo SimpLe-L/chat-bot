@@ -35,7 +35,7 @@ pnpm --filter @nebulai/web dev
 
 步骤：
 
-1. 在右侧 `Knowledge` 面板上传 `.md`、`.docx` 或 `.pdf`。
+1. 在右侧 `Knowledge` 面板上传 `.md`、`.docx`、`.pdf`、`.csv` 或 `.xlsx`。
 2. 观察文档卡片中的进度条、`job`、`embedding`、`vector`、`provider`。
 3. 调用 `curl http://localhost:8000/api/ingestion/jobs` 查看持久化任务。
 4. 上传大文档后重启 API，确认 queued/running job 会恢复处理。
@@ -46,6 +46,8 @@ pnpm --filter @nebulai/web dev
 - 上传接口先返回 `processing`。
 - job 从 `queued/running` 进入 `completed` 或明确 `failed`。
 - 文档最终显示 `completed`，L1/L2/L3 数量不为 0。
+- CSV/XLSX 表格应能在来源 excerpt/context 中看到表头、行号和 `列名=值`。
+- DOCX 表格、页眉页脚等结构化文本应能进入 chunk。
 - Milvus 不可用时文档仍应显示明确 degraded/skipped 信息，而不是接口崩溃。
 
 ## 4. Chat RAG 验证

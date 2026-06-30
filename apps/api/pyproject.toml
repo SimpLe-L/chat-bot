@@ -18,7 +18,8 @@ dependencies = [
 rag = [
   "langchain>=0.3.0",
   "pymilvus>=2.5.0",
-  "pypdf>=4.0.0"
+  "pypdf>=4.0.0",
+  "pdfplumber>=0.11.0"
 ]
 dev = [
   "pytest>=8.0.0",

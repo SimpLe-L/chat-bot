@@ -73,7 +73,7 @@ async def upload_document(
     raw = await file.read()
     filename = file.filename or "untitled.txt"
     if not is_supported_document_file(filename, file.content_type):
-        raise HTTPException(status_code=400, detail="Supported document types are plain text, Markdown, PDF, and DOCX.")
+        raise HTTPException(status_code=400, detail="Supported document types are TXT, Markdown, PDF, DOCX, CSV, and XLSX.")
 
     pg = getattr(request.app.state, "postgres_store", postgres_store)
     queue = getattr(request.app.state, "ingestion_queue_runner", ingestion_queue_runner)

@@ -88,7 +88,7 @@ RERANK_INSTRUCTION=Given a private knowledge base query, rank passages by releva
 - 会话创建、重命名、删除、历史消息恢复。
 - RAG trace 持久化与恢复。
 - 文档上传、processing 轮询、删除、重试索引。
-- txt/md/docx/pdf ingestion，PDF 依赖 `apps/api[rag]` 的 `pypdf`。
+- txt/md/docx/pdf/csv/xlsx ingestion；PDF 优先使用 `pdfplumber` 做 layout/table 文本提取，缺失时回退 `pypdf`；当前不支持旧版二进制 `.xls`。
 - L1/L2/L3 分块，L3 leaf chunks 写入 Milvus。
 - Milvus Dense + BM25 Sparse Hybrid Search + RRF。
 - Corrective RAG：`hyde`、`step_back`、`complex` 和并行二次检索。

@@ -114,7 +114,7 @@ analyze_question -> retrieve_context -> corrective_retrieve -> rerank_context ->
 
 1. `POST /api/documents` 保存文件 metadata 和 blob。
 2. 创建 `ingestion_jobs`，接口先返回 `processing`。
-3. API 内 worker claim job，解析 txt/md/docx/pdf。
+3. API 内 worker claim job，解析 txt/md/docx/pdf/csv/xlsx。
 4. 生成 L1/L2/L3 chunks，并写入 PostgreSQL 父子关系。
 5. 仅 L3 leaf chunks 写入 Milvus。
 6. Milvus collection 使用 `dense_vector` + `text` BM25 Function 生成 `sparse_vector`。
@@ -123,6 +123,13 @@ analyze_question -> retrieve_context -> corrective_retrieve -> rerank_context ->
 PostgreSQL 不可用时，上传路径会退回进程内 fallback；Milvus 不可用时，文档仍保留 chunk/metadata，并记录 vector degraded/skipped 原因。问答检索中，Hybrid 和 Dense 都失败时返回空来源和 `retrieval_failed` trace，不再伪造 mock source。
 
 检索命中 L3 后会回溯父块。单个 leaf 命中优先使用 L2 上下文；多个 L2 命中同一 L1 时自动提升到 L1 上下文，作为基础 Auto-merging 策略。
+
+当前文档解析边界：
+
+- TXT/Markdown/CSV 使用文本解析，其中 CSV 会保留表头、行号和列名。
+- XLSX 直接解析 Office Open XML workbook、shared strings 和 worksheet 行列，保留 sheet 名、表头、行号和列名；旧版二进制 `.xls` 暂不支持。
+- DOCX 解析正文段落、表格、页眉、页脚、脚注、尾注和批注，并把表格转为可检索的 `表头/第N行/列名=值` 文本。
+- PDF 优先使用 `pdfplumber` 提取 layout 文本和表格，依赖缺失或失败时回退 `pypdf` 文本提取；扫描件/OCR 仍属于后续增强边界。
 
 ## Provider 配置边界
 

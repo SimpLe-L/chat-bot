@@ -8,6 +8,7 @@ from pytest import approx
 from nebulai.main import app
 from nebulai.rag.chunking import build_hierarchical_chunks, chunk_counts
 from nebulai.rag.embeddings import EmbeddingProvider
+from nebulai.rag.ingestion import ingest_text_document
 from nebulai.stores.milvus import _collection_dense_vector_dim
 
 
@@ -86,6 +87,21 @@ def test_upload_docx_document_and_query_status() -> None:
     assert status_payload["metadata"]["chunk_counts"]["L3"] >= 1
 
 
+def test_docx_ingestion_preserves_tables_headers_and_footers() -> None:
+    result = ingest_text_document(
+        "structured.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        _structured_docx_bytes(),
+        document_id="docx-structured",
+    )
+
+    assert "页眉中的合同编号" in result.text
+    assert "员工姓名=张三" in result.text
+    assert "月薪=10000" in result.text
+    assert "页脚中的保密提示" in result.text
+    assert result.chunk_counts["L3"] >= 1
+
+
 def test_upload_pdf_document_and_query_status() -> None:
     with TestClient(app) as client:
         response = client.post(
@@ -107,6 +123,50 @@ def test_upload_pdf_document_and_query_status() -> None:
 
     assert status_response.status_code == 200
     assert status_response.json()["filename"] == "knowledge.pdf"
+
+
+def test_upload_csv_document_and_query_status() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/documents",
+            files={
+                "file": (
+                    "employees.csv",
+                    "姓名,部门,月薪\n张三,研发,10000\n李四,销售,9000\n",
+                    "text/csv",
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        status_response = _wait_for_document_status(client, payload["id"])
+
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["filename"] == "employees.csv"
+    assert status_payload["metadata"]["chunk_counts"]["L3"] >= 1
+
+
+def test_xlsx_ingestion_extracts_sheet_rows() -> None:
+    result = ingest_text_document(
+        "payroll.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _minimal_xlsx_bytes(
+            "工资表",
+            [
+                ["姓名", "部门", "月薪"],
+                ["张三", "研发", "10000"],
+                ["李四", "销售", "9000"],
+            ],
+        ),
+        document_id="xlsx-payroll",
+    )
+
+    assert "[XLSX sheet: 工资表]" in result.text
+    assert "姓名=张三" in result.text
+    assert "月薪=10000" in result.text
+    assert result.chunk_counts["L3"] >= 1
 
 
 def test_upload_rejects_unsupported_document_type() -> None:
@@ -276,6 +336,101 @@ def _minimal_docx_bytes(paragraphs: list[str]) -> bytes:
         )
         archive.writestr("word/document.xml", document_xml)
     return buffer.getvalue()
+
+
+def _structured_docx_bytes() -> bytes:
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        "<w:p><w:r><w:t>正文段落</w:t></w:r></w:p>"
+        "<w:tbl>"
+        "<w:tr><w:tc><w:p><w:r><w:t>员工姓名</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>月薪</w:t></w:r></w:p></w:tc></w:tr>"
+        "<w:tr><w:tc><w:p><w:r><w:t>张三</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>10000</w:t></w:r></w:p></w:tc></w:tr>"
+        "</w:tbl>"
+        "</w:body>"
+        "</w:document>"
+    )
+    header_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:p><w:r><w:t>页眉中的合同编号</w:t></w:r></w:p>"
+        "</w:hdr>"
+    )
+    footer_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:p><w:r><w:t>页脚中的保密提示</w:t></w:r></w:p>"
+        "</w:ftr>"
+    )
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "")
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/header1.xml", header_xml)
+        archive.writestr("word/footer1.xml", footer_xml)
+    return buffer.getvalue()
+
+
+def _minimal_xlsx_bytes(sheet_name: str, rows: list[list[str]]) -> bytes:
+    shared_strings: list[str] = []
+    string_indexes: dict[str, int] = {}
+    row_xml = []
+    for row_index, row in enumerate(rows, start=1):
+        cells = []
+        for column_index, value in enumerate(row):
+            if value not in string_indexes:
+                string_indexes[value] = len(shared_strings)
+                shared_strings.append(value)
+            cell_ref = f"{_excel_column(column_index)}{row_index}"
+            cells.append(f'<c r="{cell_ref}" t="s"><v>{string_indexes[value]}</v></c>')
+        row_xml.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        + "".join(f"<si><t>{value}</t></si>" for value in shared_strings)
+        + "</sst>"
+    )
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData>{"".join(row_xml)}</sheetData>'
+        "</worksheet>"
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets>'
+        "</workbook>"
+    )
+    relationships_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "")
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships_xml)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        archive.writestr("xl/sharedStrings.xml", shared_xml)
+    return buffer.getvalue()
+
+
+def _excel_column(index: int) -> str:
+    result = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
 def _wait_for_document_status(client: TestClient, document_id: str):

@@ -145,7 +145,7 @@ export function DocumentPanel({ onError }: DocumentPanelProps) {
       </div>
 
       <input
-        accept=".txt,.md,.markdown,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept=".txt,.md,.markdown,.pdf,.docx,.csv,.xlsx,text/plain,text/markdown,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="hidden"
         onChange={handleFileChange}
         ref={inputRef}
@@ -164,7 +164,7 @@ export function DocumentPanel({ onError }: DocumentPanelProps) {
           onClick={() => inputRef.current?.click()}
           type="button"
         >
-          上传 txt、md、docx 或 pdf 后，这里会显示分块、embedding 和向量写入状态。
+          上传 txt、md、docx、pdf、csv 或 xlsx 后，这里会显示分块、embedding 和向量写入状态。
         </button>
       ) : (
         <div className="space-y-3">

@@ -18,3 +18,7 @@ __pycache__/
 data/
 tmp/
 
+temp.md
+PROCESS.md
+RAG_KNOWLEDGE_AND_GAP_ANALYSIS.md
+

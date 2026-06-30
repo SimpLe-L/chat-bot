@@ -42,6 +42,7 @@
 4. 检索必须支持降级：Hybrid Search 或稀疏向量失败时，降级为 Dense Search，并在过程事件中明确记录。
 5. 知识库 ingestion 和 chat query 分开实现，避免上传/解析任务阻塞问答链路。
 6. `PROCESS.md` 是当前进度账本。每完成一个可验证任务，都要更新已完成内容、验证方式、风险和下一步。
+7. 当前文档 ingestion 支持 txt/md/docx/pdf/csv/xlsx；旧版二进制 `.xls` 和扫描件 OCR 仍是后续增强边界。
 
 ## 阶段拆分
 

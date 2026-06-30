@@ -168,6 +168,18 @@ pnpm typecheck
 - 新增 `apps/api/tests/test_planning.py`，扩展 `test_chat.py` 覆盖 question planner、sub-agent rerank、LLM summary fallback 和 L1 auto-merging。
 - 验证 `pnpm --filter @nebulai/api test` 通过，API 测试 `47 passed`；`pnpm --filter @nebulai/api lint`、`pnpm typecheck` 通过。Send API 改造后补充验证 `test_rag_workflow_executes_real_langgraph_nodes` 和 `test_chat_stream_contains_langgraph_rag_step` 均通过。
 
+本轮文档格式与复杂解析优化：
+
+- ingestion 支持范围从 txt/md/docx/pdf 扩展为 txt/md/docx/pdf/csv/xlsx；上传接口和前端 Knowledge 面板 accept 文案已同步。
+- CSV 通过标准库解析，输出保留表头、行号和 `列名=值`，方便回答引用表格字段。
+- XLSX 直接解析 Office Open XML workbook、shared strings 和 worksheet 行列，保留 sheet 名、表头、行号和列名；旧版二进制 `.xls` 暂不支持。
+- DOCX 解析从单纯 `word/document.xml` 段落扩展为正文段落、表格、页眉、页脚、脚注、尾注和批注；表格统一转为可检索的行列文本。
+- PDF 解析优先使用 `pdfplumber` 做 layout 文本和表格提取，缺依赖或失败时回退 `pypdf`；扫描件/OCR、复杂图片公式仍属于后续增强边界。
+- 新增/扩展 `apps/api/tests/test_documents.py`，覆盖 DOCX 表格/页眉页脚、CSV 上传、XLSX sheet 行列抽取。
+- 验证 `pnpm --filter @nebulai/api test tests/test_documents.py` 通过，文档相关测试 `14 passed`。
+- 最终回归验证：`pnpm --filter @nebulai/api test` 为 `50 passed`；`pnpm --filter @nebulai/api lint`、`pnpm typecheck`、`pnpm --filter @nebulai/web build` 均通过。
+- 当前本地 `pnpm --filter @nebulai/api eval:retrieval` 已形成非零检索基线：`hit_rate@5=0.3333`、`recall@5=0.3333`、`mrr=0.3333`；其中 `labor-rights-basic` 命中当前劳动合同相关文档，RAG 设计类 case 仍需补稳定知识库文档或 gold ids。
+
 已知验证边界：
 
 - 自动化测试和 mock/degraded 本地链路不需要真实 LLM/Embedding/Rerank key。
@@ -176,6 +188,7 @@ pnpm typecheck
 - 当前 synthesis 已有独立证据整理节点，但还未做深度冲突检测、句级引用自动校验和 token 预算压缩。
 - 当前 P2 已切换为 LangGraph `Send API` 原生 fan-out/fan-in；direct fallback 仍保留本地并行子链路。
 - 当前 API 内置 ingestion worker；多实例部署前应拆出独立 worker，并增加 lease timeout / dead-letter queue。
+- 当前 XLSX 为 OOXML 解析，暂不支持旧版二进制 `.xls`；PDF 尚未接 OCR。
 
 ## `.env` 是否填完就能测试
 
@@ -224,10 +237,11 @@ RERANK_INSTRUCTION=Given a private knowledge base query, rank passages by releva
 ## 下一步
 
 1. 用当前真实知识库补齐 `apps/api/evals/rag_evalset.jsonl` 的稳定 `gold_document_ids/gold_chunk_ids`，重新运行 `pnpm --filter @nebulai/api eval:retrieval` 建立非零检索基线。
-2. 填入真实 provider 配置后运行 `curl "http://localhost:8000/api/providers/status?live=true"`，确认 LLM/Embedding/Rerank live 状态。
-3. 用真实 provider 跑一次文档上传、问答、停止生成、会话恢复回归，按 `docs/REGRESSION_CHECKLIST.md` 验证。
-4. 在真实 provider 下复测 LLM question planner、LLM session summary 和 rerank 质量，把失败样本写入 evalset。
-5. 继续增强深层质量项：synthesis 冲突检测、句级引用校验、prompt budget packing、多实例 ingestion worker。
+2. 上传真实 CSV/XLSX/DOCX/PDF 样本，按 `docs/REGRESSION_CHECKLIST.md` 复测表格字段、页眉页脚、PDF 表格来源是否能被命中。
+3. 填入真实 provider 配置后运行 `curl "http://localhost:8000/api/providers/status?live=true"`，确认 LLM/Embedding/Rerank live 状态。
+4. 用真实 provider 跑一次文档上传、问答、停止生成、会话恢复回归，按 `docs/REGRESSION_CHECKLIST.md` 验证。
+5. 在真实 provider 下复测 LLM question planner、LLM session summary 和 rerank 质量，把失败样本写入 evalset。
+6. 继续增强深层质量项：PDF OCR、synthesis 冲突检测、句级引用校验、prompt budget packing、多实例 ingestion worker。
 
 ## 维护约定
 

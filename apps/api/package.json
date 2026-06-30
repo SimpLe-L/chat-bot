@@ -1,0 +1,10 @@
+{
+  "name": "@nebulai/api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "../../.venv/bin/python -m uvicorn nebulai.main:app --host 0.0.0.0 --port 8000 --reload --app-dir src",
+    "lint": "../../.venv/bin/python -m compileall src",
+    "test": "../../.venv/bin/python -m pytest"
+  }
+}

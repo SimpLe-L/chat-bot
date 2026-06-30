@@ -1,0 +1,18 @@
+{
+  "name": "nebulai-bot",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @nebulai/api --filter @nebulai/web dev",
+    "dev:web": "pnpm --filter @nebulai/web dev",
+    "dev:api": "pnpm --filter @nebulai/api dev",
+    "build": "pnpm --filter @nebulai/shared build && pnpm --filter @nebulai/web build",
+    "typecheck": "pnpm --filter @nebulai/shared typecheck && pnpm --filter @nebulai/web typecheck",
+    "lint": "pnpm --filter @nebulai/web lint && pnpm --filter @nebulai/api lint",
+    "test": "pnpm --filter @nebulai/api test"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
+

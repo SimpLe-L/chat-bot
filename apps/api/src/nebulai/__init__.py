@@ -1,0 +1,2 @@
+"""nebulai bot FastAPI backend."""
+

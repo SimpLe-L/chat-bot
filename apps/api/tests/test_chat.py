@@ -8,7 +8,7 @@ from nebulai.rag.answer import AnswerProvider, build_answer_prompt
 from nebulai.rag.chunking import IngestedChunk
 from nebulai.rag.corrective import assess_relevance, assessment_from_llm_content, build_step_back_query, merge_sources
 from nebulai.rag.graph import run_rag_workflow
-from nebulai.rag.memory import build_session_summary
+from nebulai.rag.memory import build_session_summary, build_session_summary_with_llm
 from nebulai.rag.rerank import _remote_rerank, apply_rerank_results
 from nebulai.rag.retrieval import _source_from_hit, apply_document_titles, expand_source_contexts, retrieve_sources
 from nebulai.rag.schemas import ChatStreamRequest, RagSource
@@ -42,9 +42,12 @@ def test_rag_workflow_executes_real_langgraph_nodes() -> None:
 
     assert result.graph_state["graph_runtime"] == "langgraph_nodes"
     assert result.graph_state["complexity"] == "complex"
+    assert result.graph_state["question_plan"].is_complex is True
+    assert len(result.graph_state["question_plan"].sub_questions) >= 2
     assert result.retrieval.mode
     assert result.corrective_retrievals
     assert result.corrective_retrievals[0].agent_id == "sub_agent_1"
+    assert result.corrective_retrievals[0].rerank is not None
     assert result.answer_plan.provider in {"mock", "openai-compatible"}
 
 
@@ -231,6 +234,81 @@ def test_expand_source_contexts_uses_parent_chunk(monkeypatch) -> None:
     assert "完整父块上下文" in (expanded[0].context or "")
 
 
+def test_expand_source_contexts_auto_merges_to_l1_when_multiple_l2_hit(monkeypatch) -> None:
+    calls: list[set[str]] = []
+
+    class FakePostgres:
+        async def get_chunks_by_ids(self, chunk_ids: list[str]):
+            calls.append(set(chunk_ids))
+            if "root-1" in chunk_ids:
+                return {
+                    "root-1": IngestedChunk(
+                        id="root-1",
+                        document_id="doc-1",
+                        parent_id=None,
+                        level="L1",
+                        ordinal=0,
+                        text="劳动合同完整章节，包含订立、权利义务、解除和风险提示。",
+                        metadata={},
+                    )
+                }
+            return {
+                "chunk-1": IngestedChunk(
+                    id="chunk-1",
+                    document_id="doc-1",
+                    parent_id="parent-1",
+                    level="L3",
+                    ordinal=1,
+                    text="订立条款",
+                    metadata={},
+                ),
+                "chunk-2": IngestedChunk(
+                    id="chunk-2",
+                    document_id="doc-1",
+                    parent_id="parent-2",
+                    level="L3",
+                    ordinal=2,
+                    text="解除条款",
+                    metadata={},
+                ),
+                "parent-1": IngestedChunk(
+                    id="parent-1",
+                    document_id="doc-1",
+                    parent_id="root-1",
+                    level="L2",
+                    ordinal=1,
+                    text="订立父块",
+                    metadata={},
+                ),
+                "parent-2": IngestedChunk(
+                    id="parent-2",
+                    document_id="doc-1",
+                    parent_id="root-1",
+                    level="L2",
+                    ordinal=2,
+                    text="解除父块",
+                    metadata={},
+                ),
+            }
+
+    monkeypatch.setattr("nebulai.rag.retrieval.postgres_store", FakePostgres())
+
+    expanded = asyncio.run(
+        expand_source_contexts(
+            [
+                RagSource(documentId="doc-1", documentTitle="劳动合同.pdf", chunkId="chunk-1", parentId="parent-1", excerpt="订立"),
+                RagSource(documentId="doc-1", documentTitle="劳动合同.pdf", chunkId="chunk-2", parentId="parent-2", excerpt="解除"),
+            ]
+        )
+    )
+
+    assert calls[-1] == {"root-1"}
+    assert expanded[0].contextLevel == "L1"
+    assert expanded[0].contextChunkId == "root-1"
+    assert expanded[1].contextChunkId == "root-1"
+    assert "完整章节" in (expanded[0].context or "")
+
+
 def test_apply_document_titles_uses_postgres_filename() -> None:
     sources = [
         RagSource(
@@ -411,6 +489,7 @@ def test_build_answer_prompt_includes_sources() -> None:
     assert "knowledge.md / chunk-1" in prompt
     assert "expanded=L2 / parent-1" in prompt
     assert "需要展示检索来源、过程、评分、降级和父块上下文。" in prompt
+    assert "在句末标注对应编号" in prompt
 
 
 def test_build_answer_prompt_includes_memory_summary() -> None:
@@ -418,6 +497,7 @@ def test_build_answer_prompt_includes_memory_summary() -> None:
 
     assert "会话摘要" in prompt
     assert "用户之前询问过 Hybrid Search。" in prompt
+    assert "当前知识库依据不足" in prompt
 
 
 def test_build_session_summary_uses_recent_messages() -> None:
@@ -434,6 +514,21 @@ def test_build_session_summary_uses_recent_messages() -> None:
     assert "assistant: Hybrid Search 结合 dense 和 sparse。" in summary
 
 
+def test_build_session_summary_with_llm_falls_back_without_provider() -> None:
+    summary = asyncio.run(
+        build_session_summary_with_llm(
+            "既有主题：RAG",
+            [
+                {"role": "user", "content": "什么是 Hybrid Search？"},
+                {"role": "assistant", "content": "Hybrid Search 结合 dense 和 sparse。"},
+            ],
+        )
+    )
+
+    assert "既有摘要" in summary
+    assert "Hybrid Search" in summary
+
+
 def test_mock_answer_provider_streams_tokens() -> None:
     async def collect_tokens() -> list[str]:
         tokens: list[str] = []
@@ -448,6 +543,7 @@ def test_mock_answer_provider_streams_tokens() -> None:
 
     assert plan.status == "warning"
     assert "mock answer provider" in "".join(tokens)
+    assert "知识库上下文" in "".join(tokens)
 
 
 def test_remote_answer_failure_falls_back_to_mock() -> None:

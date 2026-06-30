@@ -11,7 +11,7 @@
 - 存储：PostgreSQL 持久化会话、消息、文档、chunks、RAG run/steps/sources、ingestion jobs；Redis 负责 run 状态和取消信号，失败时降级内存。
 - 知识库：上传 txt/md/docx/pdf 后进入持久化 ingestion 队列，三级分块，L3 leaf chunks 写入 Milvus。
 - 检索：Milvus Dense + BM25 Sparse Hybrid Search + RRF，失败时降级 dense/mock，并在 trace 中记录。
-- RAG：Corrective RAG 已支持 `hyde`、`step_back`、`complex`，复杂问题会并行执行多个 rewritten query，并在 trace 中标记 `sub_agent_1/2/3`。
+- RAG：Corrective RAG 已支持 `hyde`、`step_back`、`complex`；复杂问题先经过 question planner 拆成子问题，再并行执行 sub-agent 检索链路，并在 trace 中标记 `sub_agent_1/2/3`。
 - Provider：LLM、Embedding 支持 OpenAI-compatible API；Rerank 支持通用 `RERANK_*` 配置并兼容旧 `JINA_*`；缺 key 或调用失败时保留可观测降级。
 - SiliconFlow：`.env` 已配置 LLM、`BAAI/bge-m3` embedding、`BAAI/bge-reranker-v2-m3` rerank；填 `SILICONFLOW_API_KEY` 后可做 live verify。
 - 记忆与恢复：同一 session 会更新 `sessions.summary`，切换/刷新页面可恢复历史消息和最近 RAG trace。
@@ -129,12 +129,52 @@ pnpm typecheck
 - 修正 `ARCHITECTURE.md` 和 `AGENTS.md` 中过时的 `mock 检索`、`LangGraph Send API` 表述。
 - 验证 `pnpm --filter @nebulai/api test`、`pnpm --filter @nebulai/api lint`、`pnpm typecheck` 通过；API 测试 `34 passed`。
 
+本轮 RAG 知识文档与 design 对照：
+
+- 新增根目录 `RAG_KNOWLEDGE_AND_GAP_ANALYSIS.md`，整理常见 RAG 类型、RAG 评估测试方法、核心知识点。
+- 对照 `design.md` 的 12 个要点标注当前完成度：已实现、部分实现、需要补齐。
+- 当时明确的主要差距包括：尚未使用 LangGraph `Send API` 完整子 Agent 图、RAG step 不是 queue 驱动的工具执行实时事件、Synthesis 仍未拆成独立证据合成节点、会话摘要仍是规则式压缩、Auto-merging 仍是父块回溯而非阈值合并；这些已在后续 P2/P1/P4/P5 基础版中补齐。
+- 本轮只新增文档和进度记录，未修改运行代码；无需重新跑自动化测试。
+
+本轮 P0 RAG eval 优化：
+
+- 按 `RAG_KNOWLEDGE_AND_GAP_ANALYSIS.md` 第 5 节建议，优先补齐 RAG eval 基础闭环。
+- 新增 `apps/api/evals/rag_evalset.jsonl`，作为可版本化 JSONL 评估集；case 支持 `gold_chunk_ids`、`gold_document_ids`、`gold_document_titles`、`gold_context_terms`、`tags`、`difficulty`。
+- 新增 `nebulai.evals.retrieval_eval`，支持运行检索评估并输出 JSON 指标：`Recall@k`、`Precision@k`、`HitRate@k`、`MRR`、`nDCG@k` 和每个 case 的命中来源。
+- 新增 `pnpm --filter @nebulai/api eval:retrieval` 命令，默认读取 `apps/api/evals/rag_evalset.jsonl`，不依赖当前 shell 工作目录。
+- 新增 `apps/api/tests/test_retrieval_eval.py`，锁定 evalset 读取、标题/上下文 gold 匹配、rank metrics 和 aggregate 平均值。
+- 当前本地运行 `pnpm --filter @nebulai/api eval:retrieval` 可输出完整 JSON；本轮 3 个 seed case 在当前本地索引下基线为 `hit_rate@5=0.0`、`recall@5=0.0`、`mrr=0.0`，后续需要用真实稳定文档 id/chunk id 扩充 evalset。
+- 验证 `pnpm --filter @nebulai/api test` 通过，API 测试 `38 passed`；补充验证 `pnpm --filter @nebulai/api test tests/test_retrieval_eval.py` 为 `4 passed`，`pnpm --filter @nebulai/api lint` 通过。
+
+本轮 P3 Synthesis 基础版优化：
+
+- 新增 `nebulai.rag.synthesis`，在 answer provider 前增加独立 synthesis 步骤。
+- `synthesize_sources()` 会按 `contextChunkId || chunkId` 去重，保留当前 rerank 顺序，默认最多取 5 条证据，返回父块扩展数量与去重/截断数量。
+- 无来源时 synthesis 返回 warning，并明确要求答案说明知识库依据不足、不能伪造来源。
+- `run_rag_workflow()` 现在在 `plan_answer` 节点产出 `SynthesisResult`；SSE `source` 事件和 answer provider 都使用 synthesis 后的 sources，trace 的“答案合成”步骤展示 synthesis message。
+- `build_answer_prompt()` 增加引用绑定要求：使用来源支持结论时必须在句末标注 `[1]`、`[2]`；无候选来源时必须说明“当前知识库依据不足”。
+- mock answer provider 在有来源时输出带编号的上下文摘要，在无来源时明确说明无法基于私有知识库确认答案。
+- 新增 `apps/api/tests/test_synthesis.py`，覆盖证据去重、无来源 warning、source 截断；扩展 answer prompt/mock answer 测试。
+- 验证 `pnpm --filter @nebulai/api test` 通过，API 测试 `41 passed`；`pnpm --filter @nebulai/api lint`、`pnpm typecheck` 通过。
+
+本轮 P2/P1/P4/P5 连续优化：
+
+- P2 question planner：新增 `nebulai.rag.planning`，支持 `simple/multi_hop/comparison/broad_summary` 分类、deterministic 子问题拆解和可选 OpenAI-compatible LLM JSON planner。
+- P2 LangGraph Send API：复杂问题不再只跑 rewritten query 检索；LangGraph graph 使用 conditional `Send("sub_agent_retrieve", ...)` 原生 fan-out，每个 sub-agent 执行 `retrieve -> corrective assess -> optional secondary retrieval -> rerank`，再 fan-in 回主链路。
+- P2 trace：复杂问题会输出“问题拆解”和每个 `Sub-Agent 检索` 步骤；sub-agent 失败或无来源时仍以 warning trace 记录。
+- P1 event queue：`run_rag_stream()` 现在会在 workflow 后台 task 执行期间消费 `event_queue`，节点执行时即时推送 `question_analysis/retrieval/rewrite/sub-agent/rerank/synthesis` step，而不是等 workflow 完成后批量组装。
+- P4 LLM 摘要记忆：新增 `build_session_summary_with_llm()`，有真实 LLM key 时生成结构化摘要；无 key、调用失败或测试环境下回退现有 deterministic 摘要。
+- P5 Auto-merging：`expand_source_contexts()` 在多个 L2 命中同一 L1 时自动拉取 L1 父块作为上下文；单个命中仍保持 L2 父块回溯。
+- 新增 `apps/api/tests/test_planning.py`，扩展 `test_chat.py` 覆盖 question planner、sub-agent rerank、LLM summary fallback 和 L1 auto-merging。
+- 验证 `pnpm --filter @nebulai/api test` 通过，API 测试 `47 passed`；`pnpm --filter @nebulai/api lint`、`pnpm typecheck` 通过。Send API 改造后补充验证 `test_rag_workflow_executes_real_langgraph_nodes` 和 `test_chat_stream_contains_langgraph_rag_step` 均通过。
+
 已知验证边界：
 
 - 自动化测试和 mock/degraded 本地链路不需要真实 LLM/Embedding/Rerank key。
 - 真实 provider live smoke 需要填入有效 key、base URL、model，并重启 API。
 - 如果更换 embedding 维度，必须重建 Milvus collection 并重新 ingestion；当前默认 collection 维度为 `384`。
-- 当前 synthesis 仍是 answer planning + provider streaming，后续可继续拆成更完整的 synthesis 节点。
+- 当前 synthesis 已有独立证据整理节点，但还未做深度冲突检测、句级引用自动校验和 token 预算压缩。
+- 当前 P2 已切换为 LangGraph `Send API` 原生 fan-out/fan-in；direct fallback 仍保留本地并行子链路。
 - 当前 API 内置 ingestion worker；多实例部署前应拆出独立 worker，并增加 lease timeout / dead-letter queue。
 
 ## `.env` 是否填完就能测试
@@ -183,10 +223,11 @@ RERANK_INSTRUCTION=Given a private knowledge base query, rank passages by releva
 
 ## 下一步
 
-1. 填入真实 provider 配置后运行 `curl "http://localhost:8000/api/providers/status?live=true"`，确认 LLM/Embedding/Rerank live 状态。
-2. 用真实 provider 跑一次文档上传、问答、停止生成、会话恢复回归，按 `docs/REGRESSION_CHECKLIST.md` 验证。
-3. 完成更完整的 synthesis 节点，必要时评估 LangGraph `astream(stream_mode="messages")`。
-4. 多实例部署前拆分独立 ingestion worker，并补 job lease timeout、dead-letter queue 和更细粒度进度事件。
+1. 用当前真实知识库补齐 `apps/api/evals/rag_evalset.jsonl` 的稳定 `gold_document_ids/gold_chunk_ids`，重新运行 `pnpm --filter @nebulai/api eval:retrieval` 建立非零检索基线。
+2. 填入真实 provider 配置后运行 `curl "http://localhost:8000/api/providers/status?live=true"`，确认 LLM/Embedding/Rerank live 状态。
+3. 用真实 provider 跑一次文档上传、问答、停止生成、会话恢复回归，按 `docs/REGRESSION_CHECKLIST.md` 验证。
+4. 在真实 provider 下复测 LLM question planner、LLM session summary 和 rerank 质量，把失败样本写入 evalset。
+5. 继续增强深层质量项：synthesis 冲突检测、句级引用校验、prompt budget packing、多实例 ingestion worker。
 
 ## 维护约定
 

@@ -1,0 +1,3 @@
+{"id":"labor-rights-basic","question":"劳动合同或劳动法材料中，劳动者通常有哪些基本权利？","gold_document_titles":["劳动合同","劳动法"],"gold_context_terms":["劳动","权利"],"answer_type":"fact","difficulty":"simple","tags":["labor","rights","smoke"]}
+{"id":"rag-hybrid-search-design","question":"项目设计中为什么要使用 Hybrid Search，而不是只使用向量检索？","gold_document_titles":["design","ARCHITECTURE","RAG"],"gold_context_terms":["Hybrid","BM25"],"answer_type":"explanation","difficulty":"medium","tags":["rag","retrieval","architecture"]}
+{"id":"rag-rerank-definition","question":"RAG 系统里的 rerank 是什么，它解决什么问题？","gold_document_titles":["RAG"],"gold_context_terms":["Rerank","排序"],"answer_type":"definition","difficulty":"simple","tags":["rag","rerank","knowledge"]}

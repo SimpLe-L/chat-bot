@@ -102,11 +102,19 @@ async def expand_source_contexts(sources: list[RagSource]) -> list[RagSource]:
     except Exception:
         return sources
 
+    l1_ids = _auto_merge_l1_ids(sources, chunks)
+    if l1_ids:
+        try:
+            chunks.update(await postgres_store.get_chunks_by_ids(sorted(l1_ids)))
+        except Exception:
+            pass
+
     expanded: list[RagSource] = []
     for source in sources:
         hit_chunk = chunks.get(source.chunkId)
         parent_chunk = chunks.get(source.parentId or "")
-        context_chunk = parent_chunk or hit_chunk
+        l1_chunk = chunks.get(parent_chunk.parent_id) if parent_chunk is not None and parent_chunk.parent_id else None
+        context_chunk = l1_chunk or parent_chunk or hit_chunk
         context = context_chunk.text if context_chunk is not None else source.context
         expanded.append(
             source.model_copy(
@@ -118,6 +126,16 @@ async def expand_source_contexts(sources: list[RagSource]) -> list[RagSource]:
             )
         )
     return expanded
+
+
+def _auto_merge_l1_ids(sources: list[RagSource], chunks: dict[str, Any]) -> set[str]:
+    l1_hit_counts: dict[str, int] = {}
+    for source in sources:
+        parent_chunk = chunks.get(source.parentId or "")
+        if parent_chunk is None or not parent_chunk.parent_id:
+            continue
+        l1_hit_counts[parent_chunk.parent_id] = l1_hit_counts.get(parent_chunk.parent_id, 0) + 1
+    return {chunk_id for chunk_id, count in l1_hit_counts.items() if count >= 2}
 
 
 def _hybrid_search(question: str, limit: int) -> list[RagSource]:

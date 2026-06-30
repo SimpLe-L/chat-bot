@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from nebulai.core.sse import encode_sse
 from nebulai.rag.graph import run_rag_stream
-from nebulai.rag.memory import build_session_summary
+from nebulai.rag.memory import build_session_summary_with_llm
 from nebulai.rag.schemas import ChatStreamRequest
 from nebulai.stores.postgres import postgres_store
 from nebulai.stores.redis import run_control_store
@@ -217,7 +217,7 @@ async def stream_chat(payload: ChatStreamRequest, request: Request) -> Streaming
                     "".join(answer_tokens),
                 )
                 messages = await pg.list_messages(session_id)
-                summary = build_session_summary(memory_summary, messages)
+                summary = await build_session_summary_with_llm(memory_summary, messages)
                 await pg.update_session_summary(session_id, summary)
             await pg.finish_run(run_id, final_status)
             await control.finish_run(run_id, final_status)

@@ -54,9 +54,11 @@ flowchart LR
 - `api/documents.py`：上传、列表、状态、删除、重试索引、job 查询。
 - `api/providers.py`：provider 配置状态和 live verify。
 - `rag/graph.py`：LangGraph RAG 主流程；LangGraph 不可用时复用同一套节点函数顺序执行。
+- `rag/planning.py`：问题复杂度分类、子问题拆解和可选 LLM question planner。
 - `rag/retrieval.py`：Milvus hybrid 检索、dense fallback 和失败可观测边界。
 - `rag/corrective.py`：相关性评分、rewrite 策略和并行二次检索。
 - `rag/rerank.py`：通用 rerank provider、旧 Jina 配置兼容与 fallback。
+- `rag/synthesis.py`：证据去重、引用顺序绑定和无证据策略。
 - `rag/answer.py`：OpenAI-compatible LLM streaming 与 mock fallback。
 - `rag/embeddings.py`：OpenAI-compatible embeddings 与 mock-hash fallback。
 - `rag/ingestion.py`：文档解析、清洗、三级分块、向量写入。
@@ -80,14 +82,16 @@ sequenceDiagram
   W->>A: POST /api/chat/stream
   A-->>W: SSE accepted
   A->>DB: 写入 session/message/run
-  A->>G: analyze_question
+  A->>G: analyze_question / question planning
   G-->>W: step question_analysis
   G->>M: hybrid retrieval
   G-->>W: step retrieval + source
-  G->>G: corrective_retrieve
+  G->>G: corrective_retrieve / sub-agent fan-out
   G-->>W: step rewrite / sub_agent retrieval
   G->>P: optional rerank
   G-->>W: step rerank
+  G->>G: synthesis evidence packing
+  G-->>W: step synthesis
   G->>P: chat completions stream 或 mock fallback
   P-->>W: token
   A->>DB: 写入 assistant message / steps / sources / summary
@@ -102,6 +106,10 @@ analyze_question -> retrieve_context -> corrective_retrieve -> rerank_context ->
 
 `build_langgraph_app()` 会缓存已编译 graph，避免每次请求重复构建。direct fallback 只负责在 LangGraph 包不可用时顺序调度相同节点函数，不再维护第二套 RAG 业务逻辑。
 
+当 `show_steps=true` 时，后端会创建 workflow `event_queue`。LangGraph 节点执行期间直接写入 step 事件，SSE 生成器一边等待 workflow task，一边消费 queue，因此前端不必等完整 workflow 结束后才看到检索、拆解、rerank 和 synthesis 过程。
+
+复杂问题会先经过 question planner。无 LLM key 时使用 deterministic planner；配置 OpenAI-compatible LLM 后可用 JSON planner 产出 `simple/multi_hop/comparison/broad_summary` 和 2-4 个子问题。LangGraph 通过 conditional `Send("sub_agent_retrieve", ...)` 原生 fan-out 到 sub-agent 节点；每个 sub-agent 会执行 `retrieve -> corrective assess -> optional secondary retrieval -> rerank`，结果再 fan-in 回主链路合并。LangGraph 包不可用时，direct fallback 使用同一套子链路本地并行执行。
+
 ## 知识库流程
 
 1. `POST /api/documents` 保存文件 metadata 和 blob。
@@ -113,6 +121,8 @@ analyze_question -> retrieve_context -> corrective_retrieve -> rerank_context ->
 7. 前端 Knowledge 面板轮询文档状态和 job 进度。
 
 PostgreSQL 不可用时，上传路径会退回进程内 fallback；Milvus 不可用时，文档仍保留 chunk/metadata，并记录 vector degraded/skipped 原因。问答检索中，Hybrid 和 Dense 都失败时返回空来源和 `retrieval_failed` trace，不再伪造 mock source。
+
+检索命中 L3 后会回溯父块。单个 leaf 命中优先使用 L2 上下文；多个 L2 命中同一 L1 时自动提升到 L1 上下文，作为基础 Auto-merging 策略。
 
 ## Provider 配置边界
 
@@ -133,6 +143,7 @@ Key 优先级：
 - LLM 失败：输出 warning，回退 mock token stream。
 - Embedding 失败：回退 mock-hash embedding，并在文档 metadata 中记录 degraded。
 - Rerank 失败：保留 Milvus RRF 顺序，并在 trace 中记录 warning。
+- Summary 失败：回退 deterministic 会话摘要，不影响消息保存。
 
 当前 `.env` 已配置硅基流动 LLM、`BAAI/bge-m3` embedding 和 `BAAI/bge-reranker-v2-m3` rerank。`BAAI/bge-m3` 为 1024 维，旧 384 维 Milvus collection 需要重建后重新 ingestion。具体配置见 `README.md` 和 `docs/PROVIDER_SMOKE.md`。
 
@@ -159,6 +170,6 @@ Redis：
 
 ## 当前缺口
 
-- Synthesis 仍需从 answer planning 继续拆成更完整的证据合成节点。
+- Synthesis 已有基础证据整理节点，后续仍需补冲突检测、句级引用校验和 prompt budget packing。
 - 多实例部署前需要独立 worker、job lease timeout、dead-letter queue。
 - 真实 provider live smoke 取决于用户提供 key、模型和 endpoint。

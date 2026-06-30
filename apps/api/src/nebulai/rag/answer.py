@@ -89,7 +89,8 @@ class AnswerProvider:
                 "role": "system",
                 "content": (
                     "你是 nebulai bot 的私有知识库问答助手。只能基于给定来源回答；"
-                    "如果来源不足，明确说明依据不足。回答要简洁，并保留来源线索。"
+                    "如果来源不足，明确说明依据不足。回答要简洁；"
+                    "使用来源信息时必须在对应句子后标注 [1]、[2] 这样的引用编号。"
                 ),
             },
             {"role": "user", "content": build_answer_prompt(question, sources, memory_summary)},
@@ -116,7 +117,13 @@ def build_answer_prompt(question: str, sources: list[RagSource], memory_summary:
             for index, source in enumerate(sources)
         )
     memory = f"会话摘要：\n{memory_summary}\n\n" if memory_summary else ""
-    return f"{memory}用户问题：{question}\n\n候选来源：\n{context}\n\n请基于候选来源回答。"
+    return (
+        f"{memory}用户问题：{question}\n\n候选来源：\n{context}\n\n"
+        "回答要求：\n"
+        "- 只能基于候选来源回答。\n"
+        "- 使用某条来源支持结论时，在句末标注对应编号，例如 [1]。\n"
+        "- 如果没有候选来源或来源不足，直接说明“当前知识库依据不足”，不要编造答案。\n"
+    )
 
 
 def build_mock_answer(
@@ -125,7 +132,20 @@ def build_mock_answer(
     retrieval_mode: str,
     memory_summary: str | None = None,
 ) -> Iterable[str]:
-    context_summary = "；".join(_source_context(source) for source in sources[:2]) or "当前没有命中可用知识库上下文"
+    if not sources:
+        answer = (
+            f"我已经进入 LangGraph RAG 节点 + {retrieval_mode} 模式。"
+            "当前没有命中可用知识库上下文，不能基于私有知识库确认答案；"
+            "请先上传或重新索引相关文档，或查看 RAG Trace 中的检索失败原因。"
+            "当前未配置真实 LLM provider，因此使用 mock answer provider 保持本地链路可验证。你的问题是："
+            f"{question}"
+        )
+        return answer
+
+    context_summary = "；".join(
+        f"[{index + 1}] {_source_context(source)}"
+        for index, source in enumerate(sources[:2])
+    )
     memory_note = f"已注入会话摘要：{memory_summary[:160]}。" if memory_summary else "当前没有可用会话摘要。"
     answer = (
         f"我已经进入 LangGraph RAG 节点 + {retrieval_mode} 模式。当前链路已完成问题分析、检索、纠错、精排和答案规划，"

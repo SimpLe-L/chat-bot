@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     testing: bool = False
     auth_required: bool = True
     auth_cookie_name: str = "nebulai_session"
+    oauth_state_cookie_name: str = "nebulai_oauth_state"
     auth_session_secret: str = "dev-nebulai-session-secret-change-me"
     auth_cookie_secure: bool = False
     auth_cookie_samesite: str = "lax"

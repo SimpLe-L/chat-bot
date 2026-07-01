@@ -55,10 +55,20 @@ curl "http://localhost:8000/api/providers/status?live=true"
 - GitHub OAuth：配置 `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET` 后可用。
 - Google OAuth：配置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` 后可用。
 
+OAuth 回调地址需要在 provider 后台配置为：
+
+```text
+GitHub: http://localhost:8000/api/auth/oauth/github/callback
+Google: http://localhost:8000/api/auth/oauth/google/callback
+```
+
+如果部署到正式域名，把上面的 host 替换为 `API_BASE_URL` 对应域名。
+
 部署时至少需要修改：
 
 ```env
 AUTH_SESSION_SECRET=足够长的随机密钥
+OAUTH_STATE_COOKIE_NAME=nebulai_oauth_state
 APP_BASE_URL=https://你的前端域名
 API_BASE_URL=https://你的 API 域名
 AUTH_COOKIE_SECURE=true
@@ -67,6 +77,10 @@ SMTP_HOST=smtp.example.com
 SMTP_PORT=587
 SMTP_USERNAME=你的 SMTP 用户名
 SMTP_PASSWORD=你的 SMTP 密码
+GITHUB_CLIENT_ID=你的 GitHub OAuth Client ID
+GITHUB_CLIENT_SECRET=你的 GitHub OAuth Client Secret
+GOOGLE_CLIENT_ID=你的 Google OAuth Client ID
+GOOGLE_CLIENT_SECRET=你的 Google OAuth Client Secret
 ```
 
 所有会话、文档、chunks、RAG trace、ingestion jobs 和 Milvus 向量都会写入 `user_id/workspace_id`。如果从旧版 Milvus collection 升级，必须重建 collection 并重新上传文档，否则旧 collection 没有 `workspace_id` 字段，无法做向量层隔离。

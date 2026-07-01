@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from nebulai.core.config import settings
 from nebulai.main import app
 
 
@@ -94,3 +95,25 @@ def test_oauth_reports_unconfigured_provider() -> None:
 
     assert response.status_code == 200
     assert response.json()["configured"] is False
+
+
+def test_oauth_start_sets_state_cookie(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "github_client_id", "github-client")
+    monkeypatch.setattr(settings, "github_client_secret", "github-secret")
+
+    with TestClient(app) as client:
+        response = client.get("/api/auth/oauth/github")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["configured"] is True
+    assert "state=" in payload["url"]
+    assert settings.oauth_state_cookie_name in response.headers["set-cookie"]
+
+
+def test_oauth_callback_rejects_state_mismatch() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/auth/oauth/github/callback?code=abc&state=wrong")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "OAuth state 校验失败，请重新发起登录。"

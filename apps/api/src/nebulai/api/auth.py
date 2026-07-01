@@ -1,5 +1,6 @@
 import hashlib
 import json
+import secrets
 import smtplib
 import urllib.parse
 import urllib.request
@@ -127,29 +128,40 @@ async def dev_login(request: Request, response: Response) -> AuthUserResponse:
 
 
 @router.get("/oauth/{provider}", response_model=OAuthProviderResponse)
-async def oauth_start(provider: str) -> OAuthProviderResponse:
-    url = _oauth_authorize_url(provider)
+async def oauth_start(provider: str, response: Response) -> OAuthProviderResponse:
+    state = _make_oauth_state()
+    url = _oauth_authorize_url(provider, state)
     if url is None:
         return OAuthProviderResponse(
             provider=provider,
             configured=False,
             message=f"{provider} OAuth 未配置 client id/secret。",
         )
+    _set_oauth_state_cookie(response, state)
     return OAuthProviderResponse(provider=provider, configured=True, url=url, message="OAuth provider configured.")
 
 
 @router.get("/oauth/{provider}/redirect")
 async def oauth_redirect(provider: str) -> RedirectResponse:
-    url = _oauth_authorize_url(provider)
+    state = _make_oauth_state()
+    url = _oauth_authorize_url(provider, state)
     if url is None:
         raise HTTPException(status_code=400, detail=f"{provider} OAuth 未配置。")
-    return RedirectResponse(url)
+    response = RedirectResponse(url)
+    _set_oauth_state_cookie(response, state)
+    return response
 
 
 @router.get("/oauth/{provider}/callback")
-async def oauth_callback(provider: str, code: str, request: Request) -> RedirectResponse:
+async def oauth_callback(provider: str, code: str, request: Request, state: str | None = None) -> RedirectResponse:
+    _verify_oauth_state(request, state)
     pg = getattr(request.app.state, "postgres_store", postgres_store)
-    profile = _fetch_oauth_profile(provider, code)
+    try:
+        profile = _fetch_oauth_profile(provider, code)
+    except HTTPException:
+        raise
+    except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail=f"{provider} OAuth 登录失败，请检查 client 配置和回调地址。") from exc
     user = await _upsert_auth_user(
         pg,
         provider=provider,
@@ -159,6 +171,7 @@ async def oauth_callback(provider: str, code: str, request: Request) -> Redirect
         avatar_url=profile.get("avatar_url"),
     )
     redirect = RedirectResponse(settings.app_base_url)
+    _clear_oauth_state_cookie(redirect)
     issue_session_cookie(redirect, user)
     return redirect
 
@@ -178,7 +191,7 @@ async def _upsert_auth_user(
     return AuthUser(id=user_id, email=email, name=name, avatar_url=avatar_url, workspace_id=workspace_id)
 
 
-def _oauth_authorize_url(provider: str) -> str | None:
+def _oauth_authorize_url(provider: str, state: str) -> str | None:
     if provider == "github":
         if not settings.github_client_id or not settings.github_client_secret:
             return None
@@ -187,6 +200,7 @@ def _oauth_authorize_url(provider: str) -> str | None:
                 "client_id": settings.github_client_id,
                 "redirect_uri": f"{settings.api_base_url}/api/auth/oauth/github/callback",
                 "scope": "read:user user:email",
+                "state": state,
             }
         )
         return f"https://github.com/login/oauth/authorize?{params}"
@@ -200,10 +214,37 @@ def _oauth_authorize_url(provider: str) -> str | None:
                 "response_type": "code",
                 "scope": "openid email profile",
                 "access_type": "online",
+                "state": state,
             }
         )
         return f"https://accounts.google.com/o/oauth2/v2/auth?{params}"
     return None
+
+
+def _make_oauth_state() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _set_oauth_state_cookie(response: Response, state: str) -> None:
+    response.set_cookie(
+        settings.oauth_state_cookie_name,
+        state,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite,
+        max_age=10 * 60,
+        path="/api/auth/oauth",
+    )
+
+
+def _clear_oauth_state_cookie(response: Response) -> None:
+    response.delete_cookie(settings.oauth_state_cookie_name, path="/api/auth/oauth")
+
+
+def _verify_oauth_state(request: Request, state: str | None) -> None:
+    expected = request.cookies.get(settings.oauth_state_cookie_name)
+    if not state or not expected or not secrets.compare_digest(state, expected):
+        raise HTTPException(status_code=400, detail="OAuth state 校验失败，请重新发起登录。")
 
 
 def _fetch_oauth_profile(provider: str, code: str) -> dict[str, str | None]:

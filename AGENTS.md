@@ -25,8 +25,6 @@
 │   └── api/                 # FastAPI RAG/Chat API
 ├── packages/
 │   └── shared/              # 前后端共享 TypeScript 类型和接口描述
-├── infra/
-│   └── milvus/              # Milvus 初始化脚本与集合说明
 ├── design.md                # 原始技术设计要求
 ├── pic.png                  # 原始项目说明截图
 ├── ARCHITECTURE.md          # 架构与数据流

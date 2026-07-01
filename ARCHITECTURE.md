@@ -7,7 +7,6 @@
 - `apps/web`：TanStack Start + React + TypeScript + Tailwind CSS + assistant-ui runtime。
 - `apps/api`：FastAPI + LangGraph RAG workflow + SSE。
 - `packages/shared`：前后端共享 TypeScript 类型。
-- `infra/milvus`：Milvus collection 说明。
 
 ```mermaid
 flowchart LR

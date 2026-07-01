@@ -100,4 +100,3 @@ RERANK_INSTRUCTION=Given a private knowledge base query, rank passages by releva
 - 当前进度：`PROCESS.md`
 - Provider smoke：`docs/PROVIDER_SMOKE.md`
 - 手工回归：`docs/REGRESSION_CHECKLIST.md`
-- 企业级 RAG 差距与路线：`docs/ENTERPRISE_RAG_GAP_ROADMAP.md`

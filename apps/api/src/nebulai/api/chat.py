@@ -178,6 +178,7 @@ async def stream_chat(payload: ChatStreamRequest, request: Request) -> Streaming
         final_status = "completed"
         await control.register_run(run_id, session_id)
         await pg.create_session(session_id, payload.message)
+        await pg.title_default_session_from_first_message(session_id, payload.message)
         await pg.append_message(user_message_id, session_id, "user", payload.message)
         await pg.create_run(run_id, session_id, payload.message, "langgraph_rag")
         memory_summary = await pg.get_session_summary(session_id)

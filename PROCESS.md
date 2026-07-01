@@ -180,6 +180,25 @@ pnpm typecheck
 - 最终回归验证：`pnpm --filter @nebulai/api test` 为 `50 passed`；`pnpm --filter @nebulai/api lint`、`pnpm typecheck`、`pnpm --filter @nebulai/web build` 均通过。
 - 当前本地 `pnpm --filter @nebulai/api eval:retrieval` 已形成非零检索基线：`hit_rate@5=0.3333`、`recall@5=0.3333`、`mrr=0.3333`；其中 `labor-rights-basic` 命中当前劳动合同相关文档，RAG 设计类 case 仍需补稳定知识库文档或 gold ids。
 
+本轮会话列表操作和标题规则修复：
+
+- 左侧会话列表每条记录新增重命名和删除图标按钮，用户不必先切换到该会话再操作；生成中的当前会话禁止删除，避免 stream 状态混乱。
+- 保留顶部当前会话重命名/删除按钮，两处操作复用同一套状态更新和后端 API。
+- 修复“新建问答”后标题长期保留默认值的问题：后端在默认标题且尚无用户消息时，会用第一条用户问题更新会话标题；手动重命名过的会话不会被第一条问题覆盖。
+- 验证 `pnpm --filter @nebulai/web typecheck`、`pnpm --filter @nebulai/web build`、`pnpm --filter @nebulai/api test tests/test_chat.py`、`pnpm --filter @nebulai/api lint` 通过；聊天测试 `23 passed`。
+
+本轮 Providers 面板紧凑化：
+
+- 右侧 Providers 模块从三张纵向状态卡片改为一行三项；每项左侧展示状态 icon，右侧展示 provider 名称。
+- provider 类型、状态和详细 message 保留在 hover tooltip 中，避免占用侧栏主要空间。
+- 验证 `pnpm --filter @nebulai/web typecheck`、`pnpm --filter @nebulai/web build` 通过。
+
+本轮企业级 RAG 路线文档：
+
+- 新增 `docs/ENTERPRISE_RAG_GAP_ROADMAP.md`，整理当前项目与企业级 RAG 平台的差距、开发优先级、验收标准和简历表达建议。
+- 路线重点覆盖权限与租户隔离、复杂文档处理、RAG Eval、答案可信度、生产可观测性、数据治理、安全合规和企业工作台体验。
+- `README.md` 已补充该路线文档入口。
+
 已知验证边界：
 
 - 自动化测试和 mock/degraded 本地链路不需要真实 LLM/Embedding/Rerank key。

@@ -70,19 +70,17 @@ export function ProviderPanel({ onError }: ProviderPanelProps) {
           正在读取 provider 状态
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="grid grid-cols-3 gap-2">
           {Object.values(status.providers).map((provider) => (
-            <div className="rounded-md border border-line bg-white p-3" key={provider.name}>
-              <div className="mb-1 flex items-start gap-2">
-                <ProviderIcon status={provider.status} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-xs font-semibold uppercase text-ink/65">{provider.name}</h3>
-                    <span className="truncate text-[11px] text-ink/45">{provider.provider}</span>
-                  </div>
-                  <p className="mt-1 text-[11px] leading-4 text-ink/55">{provider.message}</p>
-                </div>
-              </div>
+            <div
+              className="flex min-w-0 items-center gap-1.5 rounded-md border border-line bg-white px-2 py-2"
+              key={provider.name}
+              title={`${provider.name}: ${provider.provider} · ${provider.status} · ${provider.message}`}
+            >
+              <ProviderIcon status={provider.status} />
+              <span className="min-w-0 truncate text-[11px] font-semibold uppercase text-ink/65">
+                {provider.name}
+              </span>
             </div>
           ))}
         </div>
@@ -93,7 +91,7 @@ export function ProviderPanel({ onError }: ProviderPanelProps) {
 
 function ProviderIcon({ status }: { status: string }) {
   if (["completed", "configured"].includes(status)) {
-    return <CheckCircle2 className="mt-0.5 shrink-0 text-accent" size={15} />;
+    return <CheckCircle2 className="shrink-0 text-accent" size={14} />;
   }
-  return <TriangleAlert className="mt-0.5 shrink-0 text-warn" size={15} />;
+  return <TriangleAlert className="shrink-0 text-warn" size={14} />;
 }

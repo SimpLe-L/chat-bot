@@ -193,6 +193,26 @@ class PostgresStore:
             title[:80] or "新的知识库问答",
         )
 
+    async def title_default_session_from_first_message(self, session_id: str, title: str) -> None:
+        if self._pool is None:
+            return
+        await self._pool.execute(
+            """
+            UPDATE sessions
+            SET title = $2, updated_at = NOW()
+            WHERE id = $1
+              AND title = '新的知识库问答'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM messages
+                WHERE session_id = $1
+                  AND role = 'user'
+              )
+            """,
+            session_id,
+            title[:80] or "新的知识库问答",
+        )
+
     async def delete_session(self, session_id: str) -> None:
         if self._pool is None:
             return

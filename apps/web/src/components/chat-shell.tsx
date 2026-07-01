@@ -245,29 +245,37 @@ export function ChatShell() {
     setError(null);
   };
 
-  const renameActiveConversation = async () => {
-    const nextTitle = window.prompt("会话标题", activeConversation.title)?.trim();
-    if (!nextTitle || nextTitle === activeConversation.title) {
+  const renameConversationById = async (conversationId: string) => {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation) {
+      return;
+    }
+    const nextTitle = window.prompt("会话标题", conversation.title)?.trim();
+    if (!nextTitle || nextTitle === conversation.title) {
       return;
     }
     setConversations((items) =>
       items.map((item) =>
-        item.id === activeConversation.id ? { ...item, title: nextTitle, updatedAt: now() } : item,
+        item.id === conversationId ? { ...item, title: nextTitle, updatedAt: now() } : item,
       ),
     );
-    await renameConversation(activeConversation.id, nextTitle).catch((err) => {
+    await renameConversation(conversationId, nextTitle).catch((err) => {
       setError(err instanceof Error ? err.message : "会话重命名失败");
     });
   };
 
-  const deleteActiveConversation = async () => {
-    const deletedId = activeConversation.id;
+  const deleteConversationById = async (deletedId: string) => {
+    if (isStreaming && deletedId === activeConversation.id) {
+      return;
+    }
     const remaining = conversations.filter((conversation) => conversation.id !== deletedId);
     const nextConversations = remaining.length > 0 ? remaining : [createConversation()];
     setConversations(nextConversations);
-    setActiveId(nextConversations[0].id);
-    setSteps([]);
-    setSources([]);
+    if (deletedId === activeConversation.id) {
+      setActiveId(nextConversations[0].id);
+      setSteps([]);
+      setSources([]);
+    }
     setError(null);
     await deleteConversation(deletedId).catch((err) => {
       setError(err instanceof Error ? err.message : "会话删除失败");
@@ -324,23 +332,46 @@ export function ChatShell() {
 
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
             {conversations.map((conversation) => (
-              <button
-                className={`w-full rounded-md px-3 py-2.5 text-left text-sm transition ${conversation.id === activeConversation.id
+              <div
+                className={`group flex w-full items-center gap-1 rounded-md px-2 py-2 text-left text-sm transition ${conversation.id === activeConversation.id
                   ? "bg-white text-ink shadow-soft"
                   : "text-ink/65 hover:bg-white/65"
                   }`}
                 key={conversation.id}
-                onClick={() => setActiveId(conversation.id)}
-                type="button"
               >
-                <span className="block truncate font-medium">{conversation.title}</span>
-                <span className="block text-xs text-ink/45">
-                  {new Date(conversation.updatedAt).toLocaleTimeString("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </span>
-              </button>
+                <button
+                  className="min-w-0 flex-1 px-1 text-left"
+                  onClick={() => setActiveId(conversation.id)}
+                  type="button"
+                >
+                  <span className="block truncate font-medium">{conversation.title}</span>
+                  <span className="block text-xs text-ink/45">
+                    {new Date(conversation.updatedAt).toLocaleTimeString("zh-CN", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </button>
+                <div className="flex shrink-0 items-center gap-1 opacity-70 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                  <button
+                    className="grid size-7 place-items-center rounded-md border border-transparent text-ink/50 transition hover:border-[#D6DDD2] hover:bg-white hover:text-ink"
+                    onClick={() => void renameConversationById(conversation.id)}
+                    title="重命名会话"
+                    type="button"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="grid size-7 place-items-center rounded-md border border-transparent text-ink/50 transition hover:border-[#D6DDD2] hover:bg-white hover:text-ink disabled:cursor-not-allowed disabled:text-ink/25"
+                    disabled={isStreaming && conversation.id === activeConversation.id}
+                    onClick={() => void deleteConversationById(conversation.id)}
+                    title={isStreaming && conversation.id === activeConversation.id ? "生成中不能删除当前会话" : "删除会话"}
+                    type="button"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </aside>
@@ -366,7 +397,7 @@ export function ChatShell() {
               ) : null}
               <button
                 className="grid size-9 place-items-center rounded-md border border-[#D6DDD2] bg-white transition hover:border-ink/25"
-                onClick={() => void renameActiveConversation()}
+                onClick={() => void renameConversationById(activeConversation.id)}
                 title="重命名当前会话"
                 type="button"
               >
@@ -374,7 +405,7 @@ export function ChatShell() {
               </button>
               <button
                 className="grid size-9 place-items-center rounded-md border border-[#D6DDD2] bg-white transition hover:border-ink/25"
-                onClick={() => void deleteActiveConversation()}
+                onClick={() => void deleteConversationById(activeConversation.id)}
                 title="删除当前会话"
                 type="button"
               >

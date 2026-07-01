@@ -1,4 +1,5 @@
 import type { ChatStreamEvent } from "@nebulai/shared";
+import { API_BASE_URL } from "./api";
 
 export interface StreamChatInput {
   message: string;
@@ -6,8 +7,6 @@ export interface StreamChatInput {
   signal?: AbortSignal;
   onEvent: (event: ChatStreamEvent) => void;
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export async function streamChat(input: StreamChatInput): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
@@ -23,6 +22,7 @@ export async function streamChat(input: StreamChatInput): Promise<void> {
       },
     }),
     signal: input.signal,
+    credentials: "include",
   });
 
   if (!response.ok || !response.body) {
@@ -55,6 +55,7 @@ export async function streamChat(input: StreamChatInput): Promise<void> {
 export async function cancelChatRun(runId: string): Promise<void> {
   await fetch(`${API_BASE_URL}/api/chat/runs/${runId}/cancel`, {
     method: "POST",
+    credentials: "include",
   });
 }
 

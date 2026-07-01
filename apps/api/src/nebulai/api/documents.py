@@ -1,9 +1,10 @@
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from nebulai.core.auth import AuthUser, get_current_user
 from nebulai.rag.chunking import IngestedChunk
 from nebulai.rag.ingestion import DocumentIngestionResult, ingest_text_document, is_supported_document_file
 from nebulai.rag.ingestion_queue import ingestion_queue_runner
@@ -69,6 +70,7 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     request: Request,
     file: UploadFile = File(...),
+    user: AuthUser = Depends(get_current_user),
 ) -> DocumentUploadResponse:
     raw = await file.read()
     filename = file.filename or "untitled.txt"
@@ -87,9 +89,11 @@ async def upload_document(
         "ingestion_status": "queued",
         "ingestion_job_status": "queued",
         "ingestion_progress": 0,
+        "user_id": user.id,
+        "workspace_id": user.workspace_id,
     }
 
-    await pg.create_document(document_id, filename, "processing", metadata)
+    await pg.create_document(document_id, filename, "processing", metadata, user.id, user.workspace_id)
     fallback_documents[document_id] = DocumentStatusResponse(
         id=document_id,
         filename=filename,
@@ -98,7 +102,14 @@ async def upload_document(
         metadata=metadata,
     )
     if pg.enabled:
-        job = await queue.enqueue_document_ingestion(document_id, filename, file.content_type, raw)
+        job = await queue.enqueue_document_ingestion(
+            document_id,
+            filename,
+            file.content_type,
+            raw,
+            user_id=user.id,
+            workspace_id=user.workspace_id,
+        )
         metadata = {
             **metadata,
             "ingestion_job_id": job.id,
@@ -115,7 +126,7 @@ async def upload_document(
                 }
             }
         )
-        background_tasks.add_task(_process_document, document_id, filename, file.content_type, raw)
+        background_tasks.add_task(_process_document, document_id, filename, file.content_type, raw, user.id, user.workspace_id)
 
     return DocumentUploadResponse(
         id=document_id,
@@ -127,13 +138,17 @@ async def upload_document(
 
 
 @router.get("/documents", response_model=DocumentListResponse)
-async def list_documents() -> DocumentListResponse:
-    stored = await postgres_store.list_documents()
+async def list_documents(
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> DocumentListResponse:
+    pg = getattr(request.app.state, "postgres_store", postgres_store)
+    stored = await pg.list_documents(workspace_id=user.workspace_id)
     if stored:
         return DocumentListResponse(documents=[_status_from_stored(item) for item in stored])
     return DocumentListResponse(
         documents=sorted(
-            fallback_documents.values(),
+            [item for item in fallback_documents.values() if item.metadata.get("workspace_id") == user.workspace_id],
             key=lambda item: item.id,
             reverse=True,
         )
@@ -141,21 +156,31 @@ async def list_documents() -> DocumentListResponse:
 
 
 @router.get("/documents/{document_id}", response_model=DocumentStatusResponse)
-async def get_document(document_id: str) -> DocumentStatusResponse:
-    stored = await postgres_store.get_document(document_id)
+async def get_document(
+    document_id: str,
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> DocumentStatusResponse:
+    pg = getattr(request.app.state, "postgres_store", postgres_store)
+    stored = await pg.get_document(document_id, workspace_id=user.workspace_id)
     if stored is not None:
         return _status_from_stored(stored)
 
     fallback = fallback_documents.get(document_id)
-    if fallback is None:
+    if fallback is None or fallback.metadata.get("workspace_id") != user.workspace_id:
         raise HTTPException(status_code=404, detail="Document not found.")
     return fallback
 
 
 @router.delete("/documents/{document_id}", response_model=DocumentDeleteResponse)
-async def delete_document(document_id: str) -> DocumentDeleteResponse:
-    vector_result = await milvus_store.delete_document(document_id)
-    await postgres_store.delete_document(document_id)
+async def delete_document(
+    document_id: str,
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> DocumentDeleteResponse:
+    pg = getattr(request.app.state, "postgres_store", postgres_store)
+    vector_result = await milvus_store.delete_document(document_id, workspace_id=user.workspace_id)
+    await pg.delete_document(document_id, workspace_id=user.workspace_id)
     fallback_documents.pop(document_id, None)
     fallback_chunks.pop(document_id, None)
     return DocumentDeleteResponse(
@@ -167,14 +192,21 @@ async def delete_document(document_id: str) -> DocumentDeleteResponse:
 
 
 @router.post("/documents/{document_id}/retry", response_model=DocumentStatusResponse)
-async def retry_document(document_id: str, background_tasks: BackgroundTasks) -> DocumentStatusResponse:
-    stored = await postgres_store.get_document(document_id)
+async def retry_document(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> DocumentStatusResponse:
+    pg = getattr(request.app.state, "postgres_store", postgres_store)
+    queue = getattr(request.app.state, "ingestion_queue_runner", ingestion_queue_runner)
+    stored = await pg.get_document(document_id, workspace_id=user.workspace_id)
     fallback = fallback_documents.get(document_id)
     if stored is None:
         if fallback is None:
             raise HTTPException(status_code=404, detail="Document not found.")
 
-    chunks = await postgres_store.get_document_chunks(document_id) if stored is not None else []
+    chunks = await pg.get_document_chunks(document_id, workspace_id=user.workspace_id) if stored is not None else []
     if not chunks:
         chunks = fallback_chunks.get(document_id, [])
     if not chunks:
@@ -188,8 +220,8 @@ async def retry_document(document_id: str, background_tasks: BackgroundTasks) ->
         "ingestion_job_status": "queued",
         "ingestion_progress": 0,
     }
-    if postgres_store.enabled:
-        job = await ingestion_queue_runner.enqueue_vector_retry(document_id)
+    if pg.enabled:
+        job = await queue.enqueue_vector_retry(document_id, user_id=user.id, workspace_id=user.workspace_id)
         metadata = {
             **metadata,
             "ingestion_job_id": job.id,
@@ -197,9 +229,9 @@ async def retry_document(document_id: str, background_tasks: BackgroundTasks) ->
             "ingestion_progress": job.progress,
         }
     else:
-        background_tasks.add_task(_retry_document_vectors, document_id, chunks)
+        background_tasks.add_task(_retry_document_vectors, document_id, chunks, user.id, user.workspace_id)
 
-    await postgres_store.update_document_status(document_id, "processing", metadata)
+    await pg.update_document_status(document_id, "processing", metadata, workspace_id=user.workspace_id)
     if stored is not None:
         queued = _status_from_stored({**stored, "status": "processing", "metadata": {**stored["metadata"], **metadata}})
     else:
@@ -210,17 +242,26 @@ async def retry_document(document_id: str, background_tasks: BackgroundTasks) ->
 
 
 @router.get("/documents/{document_id}/jobs", response_model=IngestionJobListResponse)
-async def list_document_ingestion_jobs(document_id: str) -> IngestionJobListResponse:
-    stored = await postgres_store.get_document(document_id)
+async def list_document_ingestion_jobs(
+    document_id: str,
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> IngestionJobListResponse:
+    pg = getattr(request.app.state, "postgres_store", postgres_store)
+    stored = await pg.get_document(document_id, workspace_id=user.workspace_id)
     if stored is None and document_id not in fallback_documents:
         raise HTTPException(status_code=404, detail="Document not found.")
-    jobs = await postgres_store.list_ingestion_jobs(document_id=document_id)
+    jobs = await pg.list_ingestion_jobs(document_id=document_id, workspace_id=user.workspace_id)
     return IngestionJobListResponse(jobs=[_job_response(job) for job in jobs])
 
 
 @router.get("/ingestion/jobs", response_model=IngestionJobListResponse)
-async def list_ingestion_jobs() -> IngestionJobListResponse:
-    jobs = await postgres_store.list_ingestion_jobs()
+async def list_ingestion_jobs(
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> IngestionJobListResponse:
+    pg = getattr(request.app.state, "postgres_store", postgres_store)
+    jobs = await pg.list_ingestion_jobs(workspace_id=user.workspace_id)
     return IngestionJobListResponse(jobs=[_job_response(job) for job in jobs])
 
 
@@ -234,10 +275,17 @@ def _status_from_result(result: DocumentIngestionResult, metadata: dict[str, Any
     )
 
 
-async def _process_document(document_id: str, filename: str, content_type: str | None, raw: bytes) -> None:
+async def _process_document(
+    document_id: str,
+    filename: str,
+    content_type: str | None,
+    raw: bytes,
+    user_id: str = "local-user",
+    workspace_id: str = "local-workspace",
+) -> None:
     try:
         result = ingest_text_document(filename, content_type, raw, document_id=document_id)
-        index_result = await milvus_store.index_leaf_chunks(result.chunks)
+        index_result = await milvus_store.index_leaf_chunks(result.chunks, user_id=user_id, workspace_id=workspace_id)
         metadata = {
             "content_type": content_type or "unknown",
             "byte_size": len(raw),
@@ -251,9 +299,11 @@ async def _process_document(document_id: str, filename: str, content_type: str |
             "vector_inserted_count": index_result.inserted_count,
             "vector_message": index_result.message,
             "ingestion_status": "completed",
+            "user_id": user_id,
+            "workspace_id": workspace_id,
         }
-        await postgres_store.replace_document_chunks(document_id, result.chunks)
-        await postgres_store.update_document_status(document_id, "completed", metadata)
+        await postgres_store.replace_document_chunks(document_id, result.chunks, user_id=user_id, workspace_id=workspace_id)
+        await postgres_store.update_document_status(document_id, "completed", metadata, workspace_id=workspace_id)
         fallback_documents[document_id] = _status_from_result(result, metadata)
         fallback_chunks[document_id] = result.chunks
     except Exception as exc:
@@ -262,8 +312,10 @@ async def _process_document(document_id: str, filename: str, content_type: str |
             "ingestion_error": str(exc),
             "embedding_status": "skipped",
             "vector_status": "skipped",
+            "user_id": user_id,
+            "workspace_id": workspace_id,
         }
-        await postgres_store.update_document_status(document_id, "failed", metadata)
+        await postgres_store.update_document_status(document_id, "failed", metadata, workspace_id=workspace_id)
         existing = fallback_documents.get(document_id)
         if existing is not None:
             fallback_documents[document_id] = existing.model_copy(
@@ -274,9 +326,14 @@ async def _process_document(document_id: str, filename: str, content_type: str |
             )
 
 
-async def _retry_document_vectors(document_id: str, chunks: list[IngestedChunk]) -> None:
+async def _retry_document_vectors(
+    document_id: str,
+    chunks: list[IngestedChunk],
+    user_id: str = "local-user",
+    workspace_id: str = "local-workspace",
+) -> None:
     try:
-        index_result = await milvus_store.index_leaf_chunks(chunks)
+        index_result = await milvus_store.index_leaf_chunks(chunks, user_id=user_id, workspace_id=workspace_id)
         metadata = {
             "embedding_status": index_result.embedding_status,
             "embedding_provider": index_result.embedding_provider,
@@ -286,9 +343,11 @@ async def _retry_document_vectors(document_id: str, chunks: list[IngestedChunk])
             "vector_inserted_count": index_result.inserted_count,
             "vector_message": index_result.message,
             "ingestion_status": "completed",
+            "user_id": user_id,
+            "workspace_id": workspace_id,
         }
-        await postgres_store.update_document_status(document_id, "completed", metadata)
-        stored = await postgres_store.get_document(document_id)
+        await postgres_store.update_document_status(document_id, "completed", metadata, workspace_id=workspace_id)
+        stored = await postgres_store.get_document(document_id, workspace_id=workspace_id)
         if stored is not None:
             fallback_documents[document_id] = _status_from_stored(stored)
         elif document_id in fallback_documents:
@@ -305,8 +364,10 @@ async def _retry_document_vectors(document_id: str, chunks: list[IngestedChunk])
             "retry_error": str(exc),
             "embedding_status": "skipped",
             "vector_status": "skipped",
+            "user_id": user_id,
+            "workspace_id": workspace_id,
         }
-        await postgres_store.update_document_status(document_id, "failed", metadata)
+        await postgres_store.update_document_status(document_id, "failed", metadata, workspace_id=workspace_id)
         existing = fallback_documents.get(document_id)
         if existing is not None:
             fallback_documents[document_id] = existing.model_copy(

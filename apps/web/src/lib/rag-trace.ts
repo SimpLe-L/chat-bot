@@ -1,4 +1,5 @@
 import type { Source, Step } from "./types";
+import { apiFetch } from "./api";
 
 interface RunSummary {
   id: string;
@@ -16,10 +17,8 @@ interface RunTrace {
   sources: Source[];
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
 export async function loadLatestTrace(sessionId: string): Promise<RunTrace | null> {
-  const runsResponse = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}/runs`);
+  const runsResponse = await apiFetch(`/api/chat/sessions/${sessionId}/runs`);
   if (!runsResponse.ok) {
     return null;
   }
@@ -29,7 +28,7 @@ export async function loadLatestTrace(sessionId: string): Promise<RunTrace | nul
     return null;
   }
 
-  const traceResponse = await fetch(`${API_BASE_URL}/api/chat/runs/${latestRun.id}/trace`);
+  const traceResponse = await apiFetch(`/api/chat/runs/${latestRun.id}/trace`);
   if (!traceResponse.ok) {
     return null;
   }

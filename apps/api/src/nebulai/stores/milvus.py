@@ -28,6 +28,7 @@ class MilvusStore:
     def __init__(self, uri: str, collection_name: str) -> None:
         self._uri = uri
         self._collection_name = collection_name
+        self._base_collection_name = collection_name
         self._client: Any | None = None
         self._available = False
 
@@ -38,7 +39,15 @@ class MilvusStore:
     def client(self) -> Any:
         return self._get_client()
 
-    async def index_leaf_chunks(self, chunks: list[IngestedChunk]) -> MilvusIndexResult:
+    def ensure_collection(self) -> None:
+        self._ensure_collection(self._get_client())
+
+    async def index_leaf_chunks(
+        self,
+        chunks: list[IngestedChunk],
+        user_id: str = "local-user",
+        workspace_id: str = "local-workspace",
+    ) -> MilvusIndexResult:
         leaf_chunks = [chunk for chunk in chunks if chunk.level == "L3"]
         if not leaf_chunks:
             return MilvusIndexResult(
@@ -59,6 +68,8 @@ class MilvusStore:
                 {
                     "chunk_id": chunk.id,
                     "document_id": chunk.document_id,
+                    "user_id": user_id,
+                    "workspace_id": workspace_id,
                     "parent_id": chunk.parent_id or "",
                     "level": chunk.level,
                     "ordinal": chunk.ordinal,
@@ -88,9 +99,10 @@ class MilvusStore:
                 f"Embedding/vector indexing could not complete: {exc}",
             )
 
-    async def delete_document(self, document_id: str) -> MilvusDeleteResult:
+    async def delete_document(self, document_id: str, workspace_id: str = "local-workspace") -> MilvusDeleteResult:
         try:
             client = self._get_client()
+            self._ensure_collection(client)
             if not client.has_collection(self._collection_name, timeout=settings.milvus_timeout_seconds):
                 return MilvusDeleteResult(
                     "skipped",
@@ -99,9 +111,10 @@ class MilvusStore:
                 )
 
             escaped_document_id = document_id.replace("\\", "\\\\").replace('"', '\\"')
+            escaped_workspace_id = workspace_id.replace("\\", "\\\\").replace('"', '\\"')
             client.delete(
                 collection_name=self._collection_name,
-                filter=f'document_id == "{escaped_document_id}"',
+                filter=f'document_id == "{escaped_document_id}" && workspace_id == "{escaped_workspace_id}"',
                 timeout=settings.milvus_timeout_seconds,
             )
             return MilvusDeleteResult(
@@ -132,13 +145,26 @@ class MilvusStore:
         if self._available:
             return
         if client.has_collection(self._collection_name, timeout=settings.milvus_timeout_seconds):
-            existing_dim = _collection_dense_vector_dim(client.describe_collection(self._collection_name))
+            description = client.describe_collection(self._collection_name)
+            existing_dim = _collection_dense_vector_dim(description)
             if existing_dim is not None and existing_dim != settings.embedding_dimension:
                 raise RuntimeError(
                     f"Milvus collection {self._collection_name} dense_vector dimension is {existing_dim}, "
                     f"but EMBEDDING_DIMENSION is {settings.embedding_dimension}. "
                     "Drop/recreate the collection and retry document indexing after changing embedding models."
                 )
+            missing_fields = _missing_collection_fields(description, {"user_id", "workspace_id"})
+            if missing_fields:
+                migrated_name = f"{self._base_collection_name}_workspace"
+                if migrated_name == self._collection_name:
+                    raise RuntimeError(
+                        f"Milvus collection {self._collection_name} is missing required fields: "
+                        f"{', '.join(sorted(missing_fields))}."
+                    )
+                self._collection_name = migrated_name
+                self._available = False
+                self._ensure_collection(client)
+                return
             self._available = True
             return
 
@@ -147,6 +173,8 @@ class MilvusStore:
         schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
         schema.add_field(field_name="chunk_id", datatype=DataType.VARCHAR, is_primary=True, max_length=64)
         schema.add_field(field_name="document_id", datatype=DataType.VARCHAR, max_length=64)
+        schema.add_field(field_name="user_id", datatype=DataType.VARCHAR, max_length=96)
+        schema.add_field(field_name="workspace_id", datatype=DataType.VARCHAR, max_length=96)
         schema.add_field(field_name="parent_id", datatype=DataType.VARCHAR, max_length=64)
         schema.add_field(field_name="level", datatype=DataType.VARCHAR, max_length=8)
         schema.add_field(field_name="ordinal", datatype=DataType.INT64)
@@ -211,6 +239,26 @@ def _collection_dense_vector_dim(description: Any) -> int | None:
             if dim is not None:
                 return _to_int(dim)
     return None
+
+
+def _collection_field_names(description: Any) -> set[str]:
+    fields = []
+    schema = _value(description, "schema")
+    schema_fields = _value(schema, "fields") if schema is not None else None
+    top_level_fields = _value(description, "fields")
+    if isinstance(schema_fields, list):
+        fields.extend(schema_fields)
+    if isinstance(top_level_fields, list):
+        fields.extend(top_level_fields)
+    return {
+        str(name)
+        for field in fields
+        if (name := _value(field, "name") or _value(field, "field_name"))
+    }
+
+
+def _missing_collection_fields(description: Any, required_fields: set[str]) -> set[str]:
+    return required_fields - _collection_field_names(description)
 
 
 def _value(item: Any, key: str) -> Any:

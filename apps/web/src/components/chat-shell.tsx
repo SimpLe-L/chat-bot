@@ -5,10 +5,11 @@ import {
   type ExternalStoreAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { Bot, FileText, Pencil, Plus, Square, Trash2 } from "lucide-react";
+import { Bot, ChevronDown, FileText, LogOut, Pencil, Plus, Square, Trash2, UserCircle } from "lucide-react";
 import type { ChatStreamEvent } from "@nebulai/shared";
 
 import { cancelChatRun, streamChat } from "../lib/chat-stream";
+import { logout, type AuthUser } from "../lib/auth";
 import {
   createConversationSession,
   deleteConversation,
@@ -29,10 +30,6 @@ import { ProviderPanel } from "./provider-panel";
 import { RagTimeline } from "./rag-timeline";
 
 const now = () => new Date().toISOString();
-const initialConversationId = "local-initial-conversation";
-const initialAssistantMessageId = "local-initial-assistant-message";
-const initialCreatedAt = "2026-06-30T00:00:00.000Z";
-
 const createConversation = (
   overrides: Partial<Pick<Conversation, "id" | "updatedAt">> & {
     assistantMessageId?: string;
@@ -54,19 +51,25 @@ const createConversation = (
 
 const createInitialConversation = () =>
   createConversation({
-    id: initialConversationId,
-    assistantMessageId: initialAssistantMessageId,
-    createdAt: initialCreatedAt,
-    updatedAt: initialCreatedAt,
+    id: crypto.randomUUID(),
+    assistantMessageId: crypto.randomUUID(),
+    createdAt: now(),
+    updatedAt: now(),
   });
 
-export function ChatShell() {
+interface ChatShellProps {
+  user: AuthUser;
+  onLogout: () => void;
+}
+
+export function ChatShell({ user, onLogout }: ChatShellProps) {
   const [conversations, setConversations] = useState<Conversation[]>([createInitialConversation()]);
   const [activeId, setActiveId] = useState(() => conversations[0].id);
   const [steps, setSteps] = useState<Step[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
 
@@ -243,6 +246,12 @@ export function ChatShell() {
     setSteps([]);
     setSources([]);
     setError(null);
+  };
+
+  const handleLogout = async () => {
+    await logout().catch(() => undefined);
+    setAccountOpen(false);
+    onLogout();
   };
 
   const renameConversationById = async (conversationId: string) => {
@@ -425,6 +434,46 @@ export function ChatShell() {
         </section>
 
         <aside className="hidden h-screen min-h-0 overflow-y-auto border-l border-[#DDE2DA] bg-[#F3F5F1] px-5 py-5 lg:block">
+          <div className="relative mb-5">
+            <button
+              className="flex w-full items-center justify-between gap-3 rounded-md border border-[#D6DDD2] bg-white px-3 py-2.5 text-left transition hover:border-ink/25"
+              onClick={() => setAccountOpen((open) => !open)}
+              title="账户"
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                {user.avatar_url ? (
+                  <img
+                    alt={user.name}
+                    className="size-8 rounded-full object-cover"
+                    src={user.avatar_url}
+                  />
+                ) : (
+                  <span className="grid size-8 place-items-center rounded-full bg-[#E7ECE6] text-ink/70">
+                    <UserCircle size={19} />
+                  </span>
+                )}
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{user.name}</span>
+                  <span className="block truncate text-xs text-ink/50">{user.email ?? user.workspace_id}</span>
+                </span>
+              </span>
+              <ChevronDown size={15} />
+            </button>
+            {accountOpen ? (
+              <div className="absolute left-0 right-0 z-20 mt-2 rounded-md border border-[#D6DDD2] bg-white p-2 shadow-soft">
+                <button
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm text-ink/70 transition hover:bg-[#F3F5F1] hover:text-ink"
+                  onClick={() => void handleLogout()}
+                  type="button"
+                >
+                  <LogOut size={15} />
+                  退出登录
+                </button>
+              </div>
+            ) : null}
+          </div>
+
           <div className="mb-5">
             <p className="text-xs font-medium uppercase text-ink/40">Workspace inspector</p>
             <h2 className="mt-1 text-lg font-semibold tracking-tight">RAG 状态</h2>

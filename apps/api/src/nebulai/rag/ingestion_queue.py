@@ -55,6 +55,8 @@ class IngestionQueueRunner:
         filename: str,
         content_type: str | None,
         raw: bytes,
+        user_id: str = "local-user",
+        workspace_id: str = "local-workspace",
     ) -> EnqueuedIngestionJob:
         job_id = str(uuid4())
         await self._store.save_document_blob(document_id, content_type or "unknown", raw)
@@ -67,6 +69,8 @@ class IngestionQueueRunner:
                 "content_type": content_type or "unknown",
                 "byte_size": len(raw),
             },
+            user_id=user_id,
+            workspace_id=workspace_id,
         )
         await self._store.update_document_status(
             document_id,
@@ -80,13 +84,20 @@ class IngestionQueueRunner:
         self.wake()
         return EnqueuedIngestionJob(job_id, document_id, "queued", 0)
 
-    async def enqueue_vector_retry(self, document_id: str) -> EnqueuedIngestionJob:
+    async def enqueue_vector_retry(
+        self,
+        document_id: str,
+        user_id: str = "local-user",
+        workspace_id: str = "local-workspace",
+    ) -> EnqueuedIngestionJob:
         job_id = str(uuid4())
         await self._store.create_ingestion_job(
             job_id,
             document_id,
             kind="vector_retry",
             payload={"retry_reason": "manual"},
+            user_id=user_id,
+            workspace_id=workspace_id,
         )
         await self._store.update_document_status(
             document_id,
@@ -180,8 +191,17 @@ class IngestionQueueRunner:
                 "chunk_counts": result.chunk_counts,
             },
         )
-        index_result = await milvus_store.index_leaf_chunks(result.chunks)
-        await self._store.replace_document_chunks(document_id, result.chunks)
+        index_result = await milvus_store.index_leaf_chunks(
+            result.chunks,
+            user_id=job.get("user_id", "local-user"),
+            workspace_id=job.get("workspace_id", "local-workspace"),
+        )
+        await self._store.replace_document_chunks(
+            document_id,
+            result.chunks,
+            user_id=job.get("user_id", "local-user"),
+            workspace_id=job.get("workspace_id", "local-workspace"),
+        )
         metadata = {
             "content_type": str(blob["content_type"]),
             "byte_size": int(blob["byte_size"]),
@@ -212,11 +232,15 @@ class IngestionQueueRunner:
 
     async def _process_vector_retry(self, job: dict) -> None:
         document_id = job["document_id"]
-        chunks = await self._store.get_document_chunks(document_id)
+        chunks = await self._store.get_document_chunks(document_id, workspace_id=job.get("workspace_id", "local-workspace"))
         if not chunks:
             raise RuntimeError("Document has no persisted chunks to retry.")
         await self._store.update_ingestion_job(job["id"], progress=45)
-        index_result = await milvus_store.index_leaf_chunks(chunks)
+        index_result = await milvus_store.index_leaf_chunks(
+            chunks,
+            user_id=job.get("user_id", "local-user"),
+            workspace_id=job.get("workspace_id", "local-workspace"),
+        )
         metadata = {
             "embedding_status": index_result.embedding_status,
             "embedding_provider": index_result.embedding_provider,

@@ -1,3 +1,5 @@
+import { apiFetch } from "./api";
+
 export interface ProviderCheck {
   name: string;
   provider: string;
@@ -12,10 +14,8 @@ export interface ProviderStatus {
   providers: Record<"embedding" | "llm" | "rerank", ProviderCheck>;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
 export async function getProviderStatus(live = false): Promise<ProviderStatus> {
-  const response = await fetch(`${API_BASE_URL}/api/providers/status?live=${String(live)}`);
+  const response = await apiFetch(`/api/providers/status?live=${String(live)}`);
   if (!response.ok) {
     const detail = await readErrorDetail(response);
     throw new Error(detail || `Provider 状态查询失败：${response.status}`);

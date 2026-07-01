@@ -1,6 +1,6 @@
 # nebulai bot
 
-私有知识库 RAG 问答工作台。当前版本已具备可运行的前端聊天工作台、FastAPI SSE 后端、PostgreSQL/Redis/Milvus 本地基础设施、持久化 ingestion 队列、Milvus Hybrid Search、Corrective RAG、会话记忆、历史 trace 恢复和可配置 provider。
+私有知识库 RAG 问答工作台。当前版本已具备可运行的登录页、前端聊天工作台、FastAPI SSE 后端、PostgreSQL/Redis/Milvus 本地基础设施、持久化 ingestion 队列、Milvus Hybrid Search、Corrective RAG、会话记忆、历史 trace 恢复、workspace 数据隔离和可配置 provider。
 
 ## Quick Start
 
@@ -46,6 +46,31 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 curl "http://localhost:8000/api/providers/status?live=true"
 ```
 
+## Auth
+
+当前支持三类入口：
+
+- 内部测试账号：本地开发模式可直接点击登录，账号为 `test@nebulai.local`；生产关闭 `EMAIL_LOGIN_DEV_MODE` 后该入口不可用。
+- 邮箱验证码：本地开发默认返回 `dev_code`；生产部署设置 `EMAIL_LOGIN_DEV_MODE=false` 并配置 SMTP 后会真实发送邮件。
+- GitHub OAuth：配置 `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET` 后可用。
+- Google OAuth：配置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` 后可用。
+
+部署时至少需要修改：
+
+```env
+AUTH_SESSION_SECRET=足够长的随机密钥
+APP_BASE_URL=https://你的前端域名
+API_BASE_URL=https://你的 API 域名
+AUTH_COOKIE_SECURE=true
+EMAIL_LOGIN_DEV_MODE=false
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=你的 SMTP 用户名
+SMTP_PASSWORD=你的 SMTP 密码
+```
+
+所有会话、文档、chunks、RAG trace、ingestion jobs 和 Milvus 向量都会写入 `user_id/workspace_id`。如果从旧版 Milvus collection 升级，必须重建 collection 并重新上传文档，否则旧 collection 没有 `workspace_id` 字段，无法做向量层隔离。
+
 ## SiliconFlow
 
 当前 `.env` 已经把 LLM、Embedding、Rerank 指向硅基流动。推荐把硅基流动 key 填到 `SILICONFLOW_API_KEY`，LLM/Embedding/Rerank 都会使用这个共享 key；也可以分别填 `LLM_API_KEY`、`EMBEDDING_API_KEY`、`RERANK_API_KEY`。
@@ -85,6 +110,8 @@ RERANK_INSTRUCTION=Given a private knowledge base query, rank passages by releva
 可验证能力：
 
 - SSE 流式问答、停止生成、错误提示。
+- 登录页：GitHub、Google、邮箱验证码；右上角用户头像菜单和退出登录。
+- 基于 `workspace_id` 的会话、文档、trace、ingestion job 和 Milvus 检索隔离。
 - 会话创建、重命名、删除、历史消息恢复。
 - RAG trace 持久化与恢复。
 - 文档上传、processing 轮询、删除、重试索引。

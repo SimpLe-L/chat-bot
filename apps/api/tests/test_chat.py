@@ -61,7 +61,8 @@ def test_cancel_run_endpoint() -> None:
 
 def test_chat_history_endpoints_return_sessions_and_messages() -> None:
     class FakePostgres:
-        async def list_sessions(self):
+        async def list_sessions(self, *args, **kwargs):
+            assert kwargs.get("workspace_id") == "local-workspace"
             return [
                 {
                     "id": "session-1",
@@ -71,12 +72,14 @@ def test_chat_history_endpoints_return_sessions_and_messages() -> None:
                 }
             ]
 
-        async def create_session(self, session_id: str, title: str):
+        async def create_session(self, session_id: str, title: str, *args, **kwargs):
             assert session_id
             assert title == "服务端新会话"
+            assert args == ("local-user", "local-workspace")
 
-        async def list_messages(self, session_id: str):
+        async def list_messages(self, session_id: str, *args, **kwargs):
             assert session_id == "session-1"
+            assert kwargs.get("workspace_id") == "local-workspace"
             return [
                 {
                     "id": "message-1",
@@ -86,8 +89,9 @@ def test_chat_history_endpoints_return_sessions_and_messages() -> None:
                 }
             ]
 
-        async def list_runs(self, session_id: str):
+        async def list_runs(self, session_id: str, *args, **kwargs):
             assert session_id == "session-1"
+            assert kwargs.get("workspace_id") == "local-workspace"
             return [
                 {
                     "id": "run-1",
@@ -100,8 +104,9 @@ def test_chat_history_endpoints_return_sessions_and_messages() -> None:
                 }
             ]
 
-        async def get_run_trace(self, run_id: str):
+        async def get_run_trace(self, run_id: str, *args, **kwargs):
             assert run_id == "run-1"
+            assert kwargs.get("workspace_id") == "local-workspace"
             return {
                 "run": {
                     "id": "run-1",
@@ -116,12 +121,14 @@ def test_chat_history_endpoints_return_sessions_and_messages() -> None:
                 "sources": [{"chunkId": "chunk-1", "documentTitle": "doc.md"}],
             }
 
-        async def rename_session(self, session_id: str, title: str):
+        async def rename_session(self, session_id: str, title: str, *args, **kwargs):
             assert session_id == "session-1"
             assert title == "新标题"
+            assert kwargs.get("workspace_id") == "local-workspace"
 
-        async def delete_session(self, session_id: str):
+        async def delete_session(self, session_id: str, *args, **kwargs):
             assert session_id == "session-1"
+            assert kwargs.get("workspace_id") == "local-workspace"
 
     with TestClient(app) as client:
         client.app.state.postgres_store = FakePostgres()

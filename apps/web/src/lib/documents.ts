@@ -1,3 +1,5 @@
+import { apiFetch } from "./api";
+
 export interface DocumentStatus {
   id: string;
   filename: string;
@@ -18,13 +20,11 @@ export interface DocumentListResult {
   documents: DocumentStatus[];
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
 export async function uploadDocument(file: File): Promise<DocumentStatus> {
   const form = new FormData();
   form.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}/api/documents`, {
+  const response = await apiFetch("/api/documents", {
     method: "POST",
     body: form,
   });
@@ -39,7 +39,7 @@ export async function uploadDocument(file: File): Promise<DocumentStatus> {
 }
 
 export async function listDocuments(): Promise<DocumentStatus[]> {
-  const response = await fetch(`${API_BASE_URL}/api/documents`);
+  const response = await apiFetch("/api/documents");
   if (!response.ok) {
     const detail = await readErrorDetail(response);
     throw new Error(detail || `文档列表查询失败：${response.status}`);
@@ -49,7 +49,7 @@ export async function listDocuments(): Promise<DocumentStatus[]> {
 }
 
 export async function getDocumentStatus(documentId: string): Promise<DocumentStatus> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}`);
+  const response = await apiFetch(`/api/documents/${documentId}`);
   if (!response.ok) {
     const detail = await readErrorDetail(response);
     throw new Error(detail || `文档状态查询失败：${response.status}`);
@@ -58,7 +58,7 @@ export async function getDocumentStatus(documentId: string): Promise<DocumentSta
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}`, {
+  const response = await apiFetch(`/api/documents/${documentId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -68,7 +68,7 @@ export async function deleteDocument(documentId: string): Promise<void> {
 }
 
 export async function retryDocument(documentId: string): Promise<DocumentStatus> {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${documentId}/retry`, {
+  const response = await apiFetch(`/api/documents/${documentId}/retry`, {
     method: "POST",
   });
   if (!response.ok) {

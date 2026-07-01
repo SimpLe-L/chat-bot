@@ -19,6 +19,24 @@ class Settings(BaseSettings):
         "http://localhost:3004,http://127.0.0.1:3004"
     )
     testing: bool = False
+    auth_required: bool = True
+    auth_cookie_name: str = "nebulai_session"
+    auth_session_secret: str = "dev-nebulai-session-secret-change-me"
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+    app_base_url: str = "http://localhost:3000"
+    api_base_url: str = "http://localhost:8000"
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    email_login_from: str = "nebulai bot <no-reply@nebulai.dev>"
+    email_login_dev_mode: bool = True
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
     runtime_mode: str = "mock"
     redis_url: str = "redis://localhost:6379/0"
     milvus_uri: str = "http://localhost:19530"

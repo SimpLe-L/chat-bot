@@ -13,6 +13,7 @@
 - RAG 编排：LangGraph/LangChain。
 - 数据存储：PostgreSQL 存储会话、消息、文档元数据、检索过程记录；Redis 用于流式任务状态、中断信号和临时队列。
 - 向量数据库：Milvus 2.5+，目标使用服务端原生 BM25 Function 实现 Dense + Sparse Hybrid Search。
+- 认证与隔离：支持邮箱验证码登录、GitHub/Google OAuth 配置入口；会话、消息、文档、chunks、RAG trace、ingestion jobs 和 Milvus 向量必须按 `user_id/workspace_id` 隔离。
 - 包管理：pnpm monorepo。
 - 本地基础设施：Docker Compose 管理 PostgreSQL、Redis、Milvus 及其依赖。
 
@@ -41,6 +42,7 @@
 5. 知识库 ingestion 和 chat query 分开实现，避免上传/解析任务阻塞问答链路。
 6. `PROCESS.md` 是当前进度账本。每完成一个可验证任务，都要更新已完成内容、验证方式、风险和下一步。
 7. 当前文档 ingestion 支持 txt/md/docx/pdf/csv/xlsx；旧版二进制 `.xls` 和扫描件 OCR 仍是后续增强边界。
+8. 面向多人部署时，任何新增 API、RAG 节点、后台任务或向量操作都必须传递当前 `workspace_id`；只在前端隐藏数据不算隔离。
 
 ## 阶段拆分
 
@@ -126,6 +128,23 @@
 - 多跳问题会生成并行子任务。
 - 低相关检索会触发二次重写检索。
 - 长会话能生成摘要并注入后续回答上下文。
+
+### Phase 5：Auth 与多租户隔离
+
+交付物：
+
+- 登录页：GitHub、Google、邮箱验证码入口。
+- HttpOnly cookie session。
+- 前端 RAG 工作台右上角用户头像与退出菜单。
+- PostgreSQL `users/workspaces/workspace_members` 和业务表 `user_id/workspace_id`。
+- Milvus 向量写入 `user_id/workspace_id`，检索和删除必须带 workspace filter。
+
+验收标准：
+
+- 未登录用户进入登录页，登录后进入 RAG 工作台。
+- 退出登录清理 cookie 并跳回登录页。
+- 不同 workspace 的会话、文档、chunks、RAG trace、ingestion jobs 和 Milvus 检索结果互不可见。
+- 旧单人本地数据默认回填到 `local-user/local-workspace`，不破坏本地继续开发。
 
 ## 当前继续方式
 

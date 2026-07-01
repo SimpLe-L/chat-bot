@@ -17,11 +17,11 @@ class RetrievalResult:
     message: str
 
 
-async def retrieve_sources(question: str, limit: int = 3) -> RetrievalResult:
+async def retrieve_sources(question: str, limit: int = 3, workspace_id: str = "local-workspace") -> RetrievalResult:
     try:
-        sources = await asyncio.to_thread(_hybrid_search, question, limit)
-        sources = await enrich_source_titles(sources)
-        sources = await expand_source_contexts(sources)
+        sources = await asyncio.to_thread(_hybrid_search, question, limit, workspace_id)
+        sources = await enrich_source_titles(sources, workspace_id=workspace_id)
+        sources = await expand_source_contexts(sources, workspace_id=workspace_id)
         if sources:
             return RetrievalResult(
                 mode="milvus_hybrid",
@@ -37,9 +37,9 @@ async def retrieve_sources(question: str, limit: int = 3) -> RetrievalResult:
         )
     except Exception as hybrid_exc:
         try:
-            sources = await asyncio.to_thread(_dense_search, question, limit)
-            sources = await enrich_source_titles(sources)
-            sources = await expand_source_contexts(sources)
+            sources = await asyncio.to_thread(_dense_search, question, limit, workspace_id)
+            sources = await enrich_source_titles(sources, workspace_id=workspace_id)
+            sources = await expand_source_contexts(sources, workspace_id=workspace_id)
             if sources:
                 return RetrievalResult(
                     mode="milvus_dense_fallback",
@@ -63,13 +63,13 @@ async def retrieve_sources(question: str, limit: int = 3) -> RetrievalResult:
         )
 
 
-async def enrich_source_titles(sources: list[RagSource]) -> list[RagSource]:
+async def enrich_source_titles(sources: list[RagSource], workspace_id: str = "local-workspace") -> list[RagSource]:
     document_ids = sorted({source.documentId for source in sources if source.documentId})
     if not document_ids:
         return sources
 
     try:
-        titles = await postgres_store.get_document_titles(document_ids)
+        titles = await _call_store_with_workspace(postgres_store.get_document_titles, document_ids, workspace_id)
     except Exception:
         return sources
 
@@ -85,7 +85,7 @@ def apply_document_titles(sources: list[RagSource], titles: dict[str, str]) -> l
     ]
 
 
-async def expand_source_contexts(sources: list[RagSource]) -> list[RagSource]:
+async def expand_source_contexts(sources: list[RagSource], workspace_id: str = "local-workspace") -> list[RagSource]:
     chunk_ids = sorted(
         {
             chunk_id
@@ -98,14 +98,14 @@ async def expand_source_contexts(sources: list[RagSource]) -> list[RagSource]:
         return sources
 
     try:
-        chunks = await postgres_store.get_chunks_by_ids(chunk_ids)
+        chunks = await _call_store_with_workspace(postgres_store.get_chunks_by_ids, chunk_ids, workspace_id)
     except Exception:
         return sources
 
     l1_ids = _auto_merge_l1_ids(sources, chunks)
     if l1_ids:
         try:
-            chunks.update(await postgres_store.get_chunks_by_ids(sorted(l1_ids)))
+            chunks.update(await _call_store_with_workspace(postgres_store.get_chunks_by_ids, sorted(l1_ids), workspace_id))
         except Exception:
             pass
 
@@ -138,10 +138,11 @@ def _auto_merge_l1_ids(sources: list[RagSource], chunks: dict[str, Any]) -> set[
     return {chunk_id for chunk_id, count in l1_hit_counts.items() if count >= 2}
 
 
-def _hybrid_search(question: str, limit: int) -> list[RagSource]:
+def _hybrid_search(question: str, limit: int, workspace_id: str = "local-workspace") -> list[RagSource]:
     from pymilvus import AnnSearchRequest, RRFRanker
 
     client = milvus_store.client()
+    milvus_store.ensure_collection()
     if not client.has_collection(milvus_store.collection_name, timeout=settings.milvus_timeout_seconds):
         return []
 
@@ -150,12 +151,14 @@ def _hybrid_search(question: str, limit: int) -> list[RagSource]:
         anns_field="dense_vector",
         param={"metric_type": "COSINE"},
         limit=limit,
+        expr=_workspace_filter(workspace_id),
     )
     sparse_request = AnnSearchRequest(
         data=[question],
         anns_field="sparse_vector",
         param={"metric_type": "BM25"},
         limit=limit,
+        expr=_workspace_filter(workspace_id),
     )
     results = client.hybrid_search(
         collection_name=milvus_store.collection_name,
@@ -169,8 +172,9 @@ def _hybrid_search(question: str, limit: int) -> list[RagSource]:
     return [_source_from_hit(hit) for hit in hits]
 
 
-def _dense_search(question: str, limit: int) -> list[RagSource]:
+def _dense_search(question: str, limit: int, workspace_id: str = "local-workspace") -> list[RagSource]:
     client = milvus_store.client()
+    milvus_store.ensure_collection()
     if not client.has_collection(milvus_store.collection_name, timeout=settings.milvus_timeout_seconds):
         return []
 
@@ -180,6 +184,7 @@ def _dense_search(question: str, limit: int) -> list[RagSource]:
         anns_field="dense_vector",
         search_params={"metric_type": "COSINE"},
         limit=limit,
+        filter=_workspace_filter(workspace_id),
         output_fields=["chunk_id", "document_id", "parent_id", "ordinal", "text"],
         timeout=settings.milvus_timeout_seconds,
     )
@@ -211,3 +216,15 @@ def _source_excerpt(text: str, max_chars: int = 320) -> str:
     if len(normalized) <= max_chars:
         return normalized
     return f"{normalized[:max_chars].rstrip()}..."
+
+
+def _workspace_filter(workspace_id: str) -> str:
+    escaped = workspace_id.replace("\\", "\\\\").replace('"', '\\"')
+    return f'workspace_id == "{escaped}"'
+
+
+async def _call_store_with_workspace(method: Any, first_arg: Any, workspace_id: str) -> Any:
+    try:
+        return await method(first_arg, workspace_id=workspace_id)
+    except TypeError:
+        return await method(first_arg)

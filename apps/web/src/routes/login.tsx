@@ -1,20 +1,19 @@
 import { useEffect, useState } from "react";
 import { createRoute } from "@tanstack/react-router";
 
-import { ChatShell } from "../components/chat-shell";
 import { LoginPage } from "../components/login-page";
 import { getCurrentUser, type AuthUser } from "../lib/auth";
 import { rootRoute } from "./__root";
 
-export const indexRoute = createRoute({
+export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/",
-  component: ChatGate,
+  path: "/login",
+  component: LoginRoute,
 });
 
-export const Route = indexRoute;
+export const Route = loginRoute;
 
-function ChatGate() {
+function LoginRoute() {
   const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
 
   useEffect(() => {
@@ -23,15 +22,14 @@ function ChatGate() {
       .then((currentUser) => {
         if (!cancelled) {
           setUser(currentUser);
-          if (!currentUser) {
-            window.history.replaceState(null, "", "/login");
+          if (currentUser) {
+            window.location.replace("/");
           }
         }
       })
       .catch(() => {
         if (!cancelled) {
           setUser(null);
-          window.history.replaceState(null, "", "/login");
         }
       });
     return () => {
@@ -47,17 +45,16 @@ function ChatGate() {
     );
   }
 
-  if (user === null) {
-    return <LoginPage onLogin={setUser} />;
+  if (user) {
+    return null;
   }
 
   return (
-    <ChatShell
-      onLogout={() => {
-        setUser(null);
-        window.location.assign("/login");
+    <LoginPage
+      onLogin={(nextUser) => {
+        setUser(nextUser);
+        window.location.assign("/");
       }}
-      user={user}
     />
   );
 }

@@ -1,6 +1,7 @@
 import type { ChatRole } from "@nebulai/shared";
 
 import type { Conversation, Message } from "./types";
+import { apiFetch } from "./api";
 
 interface ChatSessionSummary {
   id: string;
@@ -16,10 +17,8 @@ interface ChatMessageRecord {
   created_at: string;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
 export async function loadConversations(): Promise<Conversation[]> {
-  const response = await fetch(`${API_BASE_URL}/api/chat/sessions`);
+  const response = await apiFetch("/api/chat/sessions");
   if (!response.ok) {
     throw new Error(`会话列表查询失败：${response.status}`);
   }
@@ -29,7 +28,7 @@ export async function loadConversations(): Promise<Conversation[]> {
 }
 
 export async function createConversationSession(title = "新的知识库问答"): Promise<Conversation> {
-  const response = await fetch(`${API_BASE_URL}/api/chat/sessions`, {
+  const response = await apiFetch("/api/chat/sessions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -49,7 +48,7 @@ export async function createConversationSession(title = "新的知识库问答")
 }
 
 export async function renameConversation(sessionId: string, title: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}`, {
+  const response = await apiFetch(`/api/chat/sessions/${sessionId}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -62,7 +61,7 @@ export async function renameConversation(sessionId: string, title: string): Prom
 }
 
 export async function deleteConversation(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${sessionId}`, {
+  const response = await apiFetch(`/api/chat/sessions/${sessionId}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -71,7 +70,7 @@ export async function deleteConversation(sessionId: string): Promise<void> {
 }
 
 async function loadConversation(session: ChatSessionSummary): Promise<Conversation | null> {
-  const response = await fetch(`${API_BASE_URL}/api/chat/sessions/${session.id}/messages`);
+  const response = await apiFetch(`/api/chat/sessions/${session.id}/messages`);
   if (!response.ok) {
     return null;
   }

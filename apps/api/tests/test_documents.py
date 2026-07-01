@@ -1,4 +1,5 @@
 from io import BytesIO
+from types import SimpleNamespace
 import time
 from zipfile import ZipFile
 
@@ -9,7 +10,7 @@ from nebulai.main import app
 from nebulai.rag.chunking import build_hierarchical_chunks, chunk_counts
 from nebulai.rag.embeddings import EmbeddingProvider
 from nebulai.rag.ingestion import ingest_text_document
-from nebulai.stores.milvus import _collection_dense_vector_dim
+from nebulai.stores.milvus import MilvusStore, _collection_dense_vector_dim
 
 
 def test_chunking_builds_three_level_tree() -> None:
@@ -308,6 +309,64 @@ def test_milvus_collection_dimension_is_read_from_schema_description() -> None:
     }
 
     assert _collection_dense_vector_dim(description) == 1024
+
+
+def test_milvus_store_migrates_collection_missing_workspace_fields(monkeypatch) -> None:
+    class FakeSchema:
+        def add_field(self, **kwargs):
+            return None
+
+        def add_function(self, function):
+            return None
+
+    class FakeIndexParams:
+        def add_index(self, **kwargs):
+            return None
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.created_collection: str | None = None
+
+        def has_collection(self, collection_name: str, timeout: float):
+            return collection_name == "nebulai_chunks"
+
+        def describe_collection(self, collection_name: str):
+            assert collection_name == "nebulai_chunks"
+            return {
+                "schema": {
+                    "fields": [
+                        {"name": "chunk_id", "params": {"max_length": "64"}},
+                        {"name": "document_id", "params": {"max_length": "64"}},
+                        {"name": "dense_vector", "params": {"dim": "384"}},
+                    ]
+                }
+            }
+
+        def create_schema(self, auto_id: bool, enable_dynamic_field: bool):
+            assert auto_id is False
+            assert enable_dynamic_field is False
+            return FakeSchema()
+
+        def prepare_index_params(self):
+            return FakeIndexParams()
+
+        def create_collection(self, collection_name: str, **kwargs):
+            self.created_collection = collection_name
+
+    fake_pymilvus = SimpleNamespace(
+        DataType=SimpleNamespace(VARCHAR="varchar", INT64="int64", FLOAT_VECTOR="float", SPARSE_FLOAT_VECTOR="sparse"),
+        Function=lambda **kwargs: kwargs,
+        FunctionType=SimpleNamespace(BM25="bm25"),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "pymilvus", fake_pymilvus)
+
+    client = FakeClient()
+    store = MilvusStore("http://localhost:19530", "nebulai_chunks")
+
+    store._ensure_collection(client)
+
+    assert store.collection_name == "nebulai_chunks_workspace"
+    assert client.created_collection == "nebulai_chunks_workspace"
 
 
 def _minimal_docx_bytes(paragraphs: list[str]) -> bytes:

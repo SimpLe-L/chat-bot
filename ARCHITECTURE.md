@@ -11,9 +11,11 @@
 ```mermaid
 flowchart LR
   User["用户"] --> Web["apps/web<br/>聊天工作台"]
+  User --> Auth["登录页<br/>GitHub/Google/邮箱验证码"]
+  Auth --> Web
   Web -->|SSE /api/chat/stream| Api["apps/api<br/>FastAPI"]
-  Web -->|REST documents/sessions/providers| Api
-  Api --> Pg["PostgreSQL<br/>会话/文档/trace/job"]
+  Web -->|REST auth/documents/sessions/providers| Api
+  Api --> Pg["PostgreSQL<br/>用户/Workspace/会话/文档/trace/job"]
   Api --> Redis["Redis<br/>run 状态/取消信号"]
   Api --> Milvus["Milvus<br/>Dense + BM25 Sparse"]
   Api --> Providers["OpenAI-compatible LLM/Embedding<br/>Generic Rerank optional"]
@@ -28,6 +30,7 @@ flowchart LR
 核心路径：`apps/web/src`
 
 - `components/chat-shell.tsx`：主工作台，会话、消息、停止生成、右侧面板协调。
+- `components/login-page.tsx`：登录页，提供 GitHub、Google、邮箱验证码入口。
 - `components/message-list.tsx`：消息流展示。
 - `components/composer.tsx`：assistant-ui composer 输入区。
 - `components/rag-timeline.tsx`：RAG trace 和来源展示。
@@ -37,10 +40,14 @@ flowchart LR
 - `lib/chat-history.ts`：会话、消息和历史 trace API。
 - `lib/documents.ts`：知识库文档和 ingestion jobs API。
 - `lib/providers.ts`：provider status API。
+- `lib/auth.ts`：当前用户、邮箱验证码、OAuth URL 和退出登录 API。
+- `lib/api.ts`：统一 API base URL 和 cookie credentials。
 
 前端运行原则：
 
 - SSE token 实时追加。
+- 未登录时进入 `/login`；登录成功进入 RAG 工作台。
+- 右上角用户头像菜单支持退出登录，退出后跳转 `/login`。
 - 停止生成先调用后端 cancel，再 abort 本地 stream。
 - 后端不可用时保留本地新会话 fallback。
 - 页面恢复时从 PostgreSQL 会话 API 拉取消息和最近一次 RAG trace。
@@ -51,7 +58,9 @@ flowchart LR
 
 - `api/chat.py`：聊天、会话、run trace、取消接口。
 - `api/documents.py`：上传、列表、状态、删除、重试索引、job 查询。
+- `api/auth.py`：`/api/auth/me`、邮箱验证码登录、GitHub/Google OAuth 跳转与回调、退出登录。
 - `api/providers.py`：provider 配置状态和 live verify。
+- `core/auth.py`：HttpOnly cookie session 签名、当前用户依赖和邮箱验证码 hash。
 - `rag/graph.py`：LangGraph RAG 主流程；LangGraph 不可用时复用同一套节点函数顺序执行。
 - `rag/planning.py`：问题复杂度分类、子问题拆解和可选 LLM question planner。
 - `rag/retrieval.py`：Milvus hybrid 检索、dense fallback 和失败可观测边界。
@@ -78,12 +87,12 @@ sequenceDiagram
   participant P as Provider
   participant DB as PostgreSQL
 
-  W->>A: POST /api/chat/stream
+  W->>A: POST /api/chat/stream + cookie
   A-->>W: SSE accepted
-  A->>DB: 写入 session/message/run
+  A->>DB: 校验 user/workspace，写入 session/message/run
   A->>G: analyze_question / question planning
   G-->>W: step question_analysis
-  G->>M: hybrid retrieval
+  G->>M: hybrid retrieval with workspace filter
   G-->>W: step retrieval + source
   G->>G: corrective_retrieve / sub-agent fan-out
   G-->>W: step rewrite / sub_agent retrieval
@@ -111,17 +120,38 @@ analyze_question -> retrieve_context -> corrective_retrieve -> rerank_context ->
 
 ## 知识库流程
 
-1. `POST /api/documents` 保存文件 metadata 和 blob。
-2. 创建 `ingestion_jobs`，接口先返回 `processing`。
+1. `POST /api/documents` 从 cookie 解析当前用户和 workspace，保存文件 metadata 和 blob。
+2. 创建带 `user_id/workspace_id` 的 `ingestion_jobs`，接口先返回 `processing`。
 3. API 内 worker claim job，解析 txt/md/docx/pdf/csv/xlsx。
 4. 生成 L1/L2/L3 chunks，并写入 PostgreSQL 父子关系。
-5. 仅 L3 leaf chunks 写入 Milvus。
-6. Milvus collection 使用 `dense_vector` + `text` BM25 Function 生成 `sparse_vector`。
+5. 仅 L3 leaf chunks 写入 Milvus，并写入 `user_id/workspace_id` 标量字段。
+6. Milvus collection 使用 `dense_vector` + `text` BM25 Function 生成 `sparse_vector`；检索和删除必须带 `workspace_id` filter。
 7. 前端 Knowledge 面板轮询文档状态和 job 进度。
 
 PostgreSQL 不可用时，上传路径会退回进程内 fallback；Milvus 不可用时，文档仍保留 chunk/metadata，并记录 vector degraded/skipped 原因。问答检索中，Hybrid 和 Dense 都失败时返回空来源和 `retrieval_failed` trace，不再伪造 mock source。
 
 检索命中 L3 后会回溯父块。单个 leaf 命中优先使用 L2 上下文；多个 L2 命中同一 L1 时自动提升到 L1 上下文，作为基础 Auto-merging 策略。
+
+## Auth 与租户隔离
+
+认证方式：
+
+- 邮箱验证码：`POST /api/auth/email/request-code` 生成验证码，`POST /api/auth/email/login` 校验后签发 HttpOnly cookie。本地开发默认返回 `dev_code`；生产关闭 dev mode 后通过 SMTP 发送验证码。
+- GitHub/Google：`GET /api/auth/oauth/{provider}` 返回授权 URL；`/redirect` 可直接跳转；`/callback` 交换 token 后创建用户并签发 cookie。生产部署需要配置对应 client id/secret。
+- 退出登录：`POST /api/auth/logout` 清理 cookie。
+
+隔离边界：
+
+- PostgreSQL 新增 `users`、`workspaces`、`workspace_members`、`auth_email_codes`。
+- `sessions`、`messages`、`documents`、`chunks`、`ingestion_jobs`、`rag_runs`、`rag_steps`、`rag_sources` 都带 `user_id/workspace_id`。
+- API 路由从 `get_current_user()` 获取当前用户，所有列表、详情、删除、trace 恢复、session summary 和 ingestion job 查询都按 `workspace_id` 过滤。
+- LangGraph workflow state 携带 `workspace_id`；primary retrieval、corrective retrieval、secondary rewritten query 和 sub-agent retrieval 都传入同一 workspace。
+- Milvus collection 需要包含 `user_id`、`workspace_id` 字段；Hybrid/Dense Search 和向量删除都使用 workspace filter。
+
+兼容边界：
+
+- 旧单人本地 PostgreSQL 数据通过 schema 默认值回填到 `local-user/local-workspace`。
+- 如果本地旧 Milvus collection 没有 `workspace_id` 字段，部署多人隔离前必须重建 collection 并重新 ingestion。
 
 当前文档解析边界：
 
@@ -157,6 +187,7 @@ Key 优先级：
 
 PostgreSQL 关键表：
 
+- `users`、`workspaces`、`workspace_members`、`auth_email_codes`
 - `sessions`、`messages`
 - `documents`、`document_blobs`、`chunks`
 - `ingestion_jobs`
@@ -166,6 +197,7 @@ Milvus collection：
 
 - 名称：`nebulai_chunks`
 - 仅存 L3 leaf chunks。
+- 标量字段包含 `document_id`、`user_id`、`workspace_id`、`parent_id`、`level`、`ordinal`、`text`。
 - `dense_vector` 维度来自 `EMBEDDING_DIMENSION`，默认 `384`。
 - `text` 启用 analyzer，并通过 BM25 Function 写入 `sparse_vector`。
 
@@ -177,5 +209,7 @@ Redis：
 ## 当前缺口
 
 - Synthesis 已有基础证据整理节点，后续仍需补冲突检测、句级引用校验和 prompt budget packing。
+- 邮箱验证码生产路径依赖 SMTP 配置；未配置 SMTP 且关闭 dev mode 时会返回明确错误。
+- GitHub/Google OAuth 已有跳转和回调框架，生产部署前需要填 client id/secret，并确认回调域名。
 - 多实例部署前需要独立 worker、job lease timeout、dead-letter queue。
 - 真实 provider live smoke 取决于用户提供 key、模型和 endpoint。

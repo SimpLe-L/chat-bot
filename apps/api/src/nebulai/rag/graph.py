@@ -45,6 +45,7 @@ class RagGraphState(TypedDict, total=False):
     question: str
     session_id: str
     run_id: str
+    workspace_id: str
     memory_summary: str | None
     event_queue: asyncio.Queue[ChatStreamEvent] | None
     complexity: str
@@ -105,6 +106,7 @@ def build_langgraph_app() -> Any | None:
             event_queue=state.get("event_queue"),
             run_id=state.get("run_id"),
             session_id=state.get("session_id"),
+            workspace_id=state.get("workspace_id", "local-workspace"),
         )
         return {"corrective_retrievals": [corrective_retrieval]}
 
@@ -154,11 +156,13 @@ async def run_rag_workflow(
     memory_summary: str | None = None,
     run_id: str | None = None,
     event_queue: asyncio.Queue[ChatStreamEvent] | None = None,
+    workspace_id: str = "local-workspace",
 ) -> RagWorkflowResult:
     graph_state: RagGraphState = {
         "question": payload.message,
         "session_id": session_id,
         "run_id": run_id or str(uuid4()),
+        "workspace_id": workspace_id,
         "memory_summary": memory_summary,
         "event_queue": event_queue,
         "graph_runtime": "direct_fallback",
@@ -217,7 +221,10 @@ async def _analyze_question_state(graph_state: RagGraphState, runtime: str) -> R
 
 
 async def _retrieve_context_state(graph_state: RagGraphState) -> RagGraphState:
-    retrieval = await retrieve_sources(graph_state["question"])
+    retrieval = await retrieve_sources(
+        graph_state["question"],
+        workspace_id=graph_state.get("workspace_id", "local-workspace"),
+    )
     next_state: RagGraphState = {**graph_state, "retrieval": retrieval}
     await _emit_step(
         next_state,
@@ -293,6 +300,7 @@ async def _run_retrieval_sub_agents(
     event_queue: asyncio.Queue[ChatStreamEvent] | None = None,
     run_id: str | None = None,
     session_id: str | None = None,
+    workspace_id: str = "local-workspace",
 ) -> list[CorrectiveRetrieval]:
     return list(
         await asyncio.gather(
@@ -303,6 +311,7 @@ async def _run_retrieval_sub_agents(
                     event_queue=event_queue,
                     run_id=run_id,
                     session_id=session_id,
+                    workspace_id=workspace_id,
                 )
                 for index, query in enumerate(queries)
             )
@@ -317,11 +326,17 @@ async def _run_single_retrieval_sub_agent(
     event_queue: asyncio.Queue[ChatStreamEvent] | None = None,
     run_id: str | None = None,
     session_id: str | None = None,
+    workspace_id: str = "local-workspace",
 ) -> CorrectiveRetrieval:
-    retrieval = await retrieve_sources(query)
+    retrieval = await retrieve_sources(query, workspace_id=workspace_id)
     relevance = await assess_relevance_with_llm(query, retrieval.sources)
     secondary_retrievals = (
-        await asyncio.gather(*(retrieve_sources(rewrite) for rewrite in relevance.rewritten_queries))
+        await asyncio.gather(
+            *(
+                retrieve_sources(rewrite, workspace_id=workspace_id)
+                for rewrite in relevance.rewritten_queries
+            )
+        )
         if relevance.needs_rewrite
         else []
     )
@@ -373,6 +388,7 @@ async def _direct_sub_agent_state(graph_state: RagGraphState) -> RagGraphState:
         event_queue=graph_state.get("event_queue"),
         run_id=graph_state.get("run_id"),
         session_id=graph_state.get("session_id"),
+        workspace_id=graph_state.get("workspace_id", "local-workspace"),
     )
     return {**graph_state, "corrective_retrievals": corrective_retrievals}
 
@@ -450,6 +466,7 @@ async def run_rag_stream(
     session_id: str,
     cancellation: CancellationChecker,
     memory_summary: str | None = None,
+    workspace_id: str = "local-workspace",
 ) -> AsyncIterator[ChatStreamEvent]:
     yield ChatStreamEvent(type="accepted", runId=run_id, sessionId=session_id)
     await asyncio.sleep(0.08)
@@ -461,6 +478,7 @@ async def run_rag_stream(
             memory_summary,
             run_id=run_id,
             event_queue=event_queue,
+            workspace_id=workspace_id,
         )
     )
 
